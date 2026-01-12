@@ -43,7 +43,12 @@ Bridge Server が提供する REST API および WebSocket プロトコルの仕
 
 ### GET /api/sessions
 
-アクティブなセッションの一覧を取得する。
+セッションの一覧を取得する。
+
+**クエリパラメータ:**
+| パラメータ | 型 | 必須 | 説明 |
+|-----------|-----|------|------|
+| include_ended | boolean | No | `true` の場合、終了済みセッションも含める |
 
 **レスポンス:**
 ```json
@@ -52,11 +57,24 @@ Bridge Server が提供する REST API および WebSocket プロトコルの仕
     {
       "id": "uuid",
       "workDir": "/path/to/project",
-      "createdAt": "2025-01-12T00:00:00.000Z"
+      "createdAt": 1736640000000,
+      "updatedAt": 1736640000000,
+      "status": "active",
+      "processAlive": true
     }
   ]
 }
 ```
+
+**フィールド説明:**
+| フィールド | 型 | 説明 |
+|-----------|-----|------|
+| id | string | セッション UUID |
+| workDir | string | 作業ディレクトリ |
+| createdAt | number | 作成時刻（Unix タイムスタンプ） |
+| updatedAt | number | 更新時刻（Unix タイムスタンプ） |
+| status | string | `"active"` または `"ended"` |
+| processAlive | boolean | CLI プロセスが生きているか |
 
 ---
 
@@ -120,6 +138,61 @@ Bridge Server が提供する REST API および WebSocket プロトコルの仕
   "success": true
 }
 ```
+
+---
+
+### GET /api/sessions/:id/messages
+
+セッションのメッセージ履歴を取得する。
+
+**パスパラメータ:**
+- `id`: セッション ID
+
+**クエリパラメータ:**
+| パラメータ | 型 | デフォルト | 説明 |
+|-----------|-----|----------|------|
+| limit | number | 100 | 取得するメッセージ数 |
+| offset | number | 0 | オフセット |
+| order | string | "asc" | `"asc"` または `"desc"` |
+
+**レスポンス:**
+```json
+{
+  "sessionId": "uuid",
+  "messages": [
+    {
+      "id": "msg-uuid",
+      "type": "user",
+      "content": "Hello, Claude!",
+      "timestamp": 1736640000000,
+      "toolName": null,
+      "toolInput": null,
+      "permissionRequest": null
+    },
+    {
+      "id": "msg-uuid-2",
+      "type": "assistant",
+      "content": "Hello! How can I help you?",
+      "timestamp": 1736640001000,
+      "toolName": null,
+      "toolInput": null,
+      "permissionRequest": null
+    }
+  ],
+  "total": 42,
+  "hasMore": true
+}
+```
+
+**メッセージ type の種類:**
+| type | 説明 |
+|------|------|
+| `user` | ユーザーメッセージ |
+| `assistant` | Claude の応答 |
+| `system` | システムメッセージ |
+| `tool_use` | ツール使用 |
+| `permission_request` | 権限リクエスト |
+| `result` | 処理結果 |
 
 ---
 
@@ -248,6 +321,42 @@ interface WebSocketMessage {
 
 ---
 
+#### restore_session
+
+過去のセッション履歴を取得する（プロセスが終了している場合）。
+
+```json
+{
+  "type": "restore_session",
+  "sessionId": "uuid"
+}
+```
+
+| フィールド | 型 | 必須 | 説明 |
+|-----------|-----|------|------|
+| type | string | Yes | `"restore_session"` |
+| sessionId | string | Yes | 復元するセッションの ID |
+
+---
+
+#### attach_session
+
+既存のアクティブなセッションに再接続する（プロセスが生きている場合）。
+
+```json
+{
+  "type": "attach_session",
+  "sessionId": "uuid"
+}
+```
+
+| フィールド | 型 | 必須 | 説明 |
+|-----------|-----|------|------|
+| type | string | Yes | `"attach_session"` |
+| sessionId | string | Yes | 再接続するセッションの ID |
+
+---
+
 ### サーバー → クライアント
 
 #### connected
@@ -363,6 +472,47 @@ Claude からのメッセージを通知する。
 
 ---
 
+#### session_history
+
+セッションのメッセージ履歴を返す。`restore_session` または `attach_session` への応答。
+
+```json
+{
+  "type": "session_history",
+  "sessionId": "uuid",
+  "messages": [
+    {
+      "id": "msg-uuid",
+      "type": "user",
+      "content": "Hello, Claude!",
+      "timestamp": 1736640000000
+    }
+  ],
+  "processAlive": false
+}
+```
+
+| フィールド | 型 | 説明 |
+|-----------|-----|------|
+| sessionId | string | セッション ID |
+| messages | array | メッセージ履歴 |
+| processAlive | boolean | CLI プロセスが生きているか |
+
+---
+
+#### session_attached
+
+セッションへの再接続が成功したことを通知する。
+
+```json
+{
+  "type": "session_attached",
+  "sessionId": "uuid"
+}
+```
+
+---
+
 ## Claude CLI stream-json 形式
 
 Bridge Server と Claude CLI 間で使用される stream-json 形式。
@@ -453,3 +603,5 @@ Bridge Server と Claude CLI 間で使用される stream-json 形式。
 | `Invalid work directory` | 許可されていないディレクトリが指定された |
 | `Session not found` | 指定されたセッションが見つからない |
 | `Failed to create session` | セッションの作成に失敗した |
+| `Session process is not alive` | セッションのプロセスが終了しており再接続不可 |
+| `Session is not active` | セッションが終了済みで操作不可 |

@@ -33,7 +33,8 @@ Claude Code Mobile Client の開発計画。
 | タスク | 詳細 | 関連ファイル |
 |--------|------|-------------|
 | WebSocket 自動再接続 | Exponential backoff で自動再接続を試みる | `pwa/app/hooks/useWebSocket.ts` |
-| セッション状態の永続化 | localStorage にセッション情報を保存・復元 | `pwa/app/store/sessionStore.ts` |
+| セッション状態の永続化 | SQLite でセッション情報・メッセージ履歴を保存 | `server/src/db/` |
+| セッション復元機能 | 過去セッション履歴の閲覧・アクティブセッションへの再接続 | `server/src/routes/ws.ts`, `pwa/app/components/ConnectionPanel.tsx` |
 | Bridge Server ユニットテスト | session.ts, ws.ts, stream.ts のテストを追加 | `server/src/**/*.test.ts`（新規） |
 | グレースフルシャットダウン | SIGTERM 受信時にセッションを適切にクリーンアップ | `server/src/index.ts` |
 
@@ -48,7 +49,6 @@ PWA としての機能を強化し、モバイル体験を向上させる。
 | Service Worker 実装 | オフライン時に UI を表示（接続エラー画面） | `pwa/public/sw.js`（新規） |
 | プッシュ通知 | 長時間タスク完了時に通知 | `pwa/app/lib/notifications.ts`（新規） |
 | アプリアイコン最適化 | 各サイズのアイコンを用意 | `pwa/public/icons/` |
-| キャッシュ戦略 | メッセージ履歴のローカルキャッシュ | `pwa/app/store/sessionStore.ts` |
 
 ---
 
@@ -71,7 +71,7 @@ PWA としての機能を強化し、モバイル体験を向上させる。
 | Phase | 完了基準 |
 |-------|---------|
 | Phase 1 | 権限リクエストの承認/拒否がモバイルから可能 |
-| Phase 2 | 接続が切れても自動復旧、テストカバレッジ > 70% |
+| Phase 2 | セッション永続化、接続切断後も履歴復元可能、テストカバレッジ > 70% |
 | Phase 3 | オフライン時もアプリが開ける、通知が届く |
 | Phase 4 | 24 時間以上の連続稼働が可能 |
 

@@ -1,11 +1,14 @@
 import { Hono } from "hono";
 import { sessionManager, isValidWorkDir } from "../services/session";
+import { dbManager } from "../db/database";
+import { MessageRepository } from "../db/repositories/messageRepository";
 
 export const apiRoutes = new Hono();
 
-// List all active sessions
+// List sessions
 apiRoutes.get("/sessions", (c) => {
-  const sessions = sessionManager.listSessions();
+  const includeEnded = c.req.query("include_ended") === "true";
+  const sessions = sessionManager.listSessions(includeEnded);
   return c.json({ sessions });
 });
 
@@ -32,13 +35,20 @@ apiRoutes.post("/sessions", async (c) => {
 // Get session details
 apiRoutes.get("/sessions/:id", (c) => {
   const id = c.req.param("id");
-  const session = sessionManager.getSession(id);
 
-  if (!session) {
-    return c.json({ error: "Session not found" }, 404);
+  // まずメモリ上のアクティブセッションを確認
+  const activeSession = sessionManager.getSession(id);
+  if (activeSession) {
+    return c.json({ session: activeSession.getInfo() });
   }
 
-  return c.json({ session: session.getInfo() });
+  // DB から過去のセッションを取得
+  const sessionInfo = sessionManager.getSessionInfo(id);
+  if (sessionInfo) {
+    return c.json({ session: sessionInfo });
+  }
+
+  return c.json({ error: "Session not found" }, 404);
 });
 
 // End a session
@@ -51,6 +61,31 @@ apiRoutes.delete("/sessions/:id", (c) => {
   }
 
   return c.json({ success: true });
+});
+
+// Get session messages
+apiRoutes.get("/sessions/:id/messages", (c) => {
+  const id = c.req.param("id");
+  const limit = Number(c.req.query("limit")) || 100;
+  const offset = Number(c.req.query("offset")) || 0;
+  const order = c.req.query("order") === "desc" ? "desc" : "asc";
+
+  // セッションの存在確認
+  const sessionInfo = sessionManager.getSessionInfo(id);
+  if (!sessionInfo) {
+    return c.json({ error: "Session not found" }, 404);
+  }
+
+  const messageRepo = new MessageRepository(dbManager.getDb());
+  const messages = messageRepo.findBySessionId(id, { limit, offset, order });
+  const total = messageRepo.countBySessionId(id);
+
+  return c.json({
+    sessionId: id,
+    messages,
+    total,
+    hasMore: offset + messages.length < total,
+  });
 });
 
 // List available projects/directories (only returns validated paths)
