@@ -1,0 +1,28 @@
+# Dependencies
+node_modules/
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# OS
+.DS_Store
+
+# Build outputs
+dist/
+build/
+.react-router/
+
+# Temporary files (CLAUDE.md規定)
+.tmp/
+
+# IDE
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log
+
+.serena/
