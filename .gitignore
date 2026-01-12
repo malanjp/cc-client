@@ -26,3 +26,5 @@ build/
 *.log
 
 .serena/
+
+server/data/
