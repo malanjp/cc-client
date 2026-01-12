@@ -208,9 +208,16 @@ export class ClaudeSession {
   abort(): void {
     if (this.process && this.status === "active") {
       try {
-        this.process.kill("SIGINT");
+        // stdin に中断メッセージを送信（プロセスを終了させない）
+        this.writeToStdin({ type: "abort" });
       } catch (error) {
-        console.error("[Session] Failed to send SIGINT:", error);
+        console.error("[Session] Failed to send abort:", error);
+        // stdin への書き込みが失敗した場合のみ SIGINT を試行
+        try {
+          this.process.kill("SIGINT");
+        } catch (killError) {
+          console.error("[Session] Failed to send SIGINT:", killError);
+        }
       }
     }
   }
