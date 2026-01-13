@@ -41,10 +41,13 @@ export const ClaudeMessageSchema = z.object({
     content: z.union([z.string(), z.array(ContentBlockSchema)]).optional(),
   }).optional(),
   tool_use: ToolUseSchema.optional(),
-  result: z.object({
-    success: z.boolean().optional(),
-    error: z.string().optional(),
-  }).optional(),
+  result: z.union([
+    z.string(),
+    z.object({
+      success: z.boolean().optional(),
+      error: z.string().optional(),
+    }),
+  ]).optional(),
   permission_request: z.object({
     id: z.string(),
     tool: z.string(),
@@ -110,4 +113,43 @@ export function formatMessage(message: ClaudeMessage): string {
   }
 
   return JSON.stringify(message);
+}
+
+/**
+ * 部分的なJSONチャンクをバッファリングして完全な行に変換するパーサー
+ */
+export class PartialJsonParser {
+  private buffer = "";
+
+  /**
+   * チャンクを追加し、完成した行があればパースして返す
+   * @param chunk 受信したテキストチャンク
+   * @returns パースされたメッセージの配列
+   */
+  addChunk(chunk: string): ClaudeMessage[] {
+    this.buffer += chunk;
+    const messages: ClaudeMessage[] = [];
+
+    let newlineIndex: number;
+    while ((newlineIndex = this.buffer.indexOf('\n')) !== -1) {
+      const line = this.buffer.substring(0, newlineIndex);
+      this.buffer = this.buffer.substring(newlineIndex + 1);
+
+      if (line.trim()) {
+        const msg = parseStreamJson(line);
+        if (msg) {
+          messages.push(msg);
+        }
+      }
+    }
+
+    return messages;
+  }
+
+  /**
+   * バッファをクリア
+   */
+  clear(): void {
+    this.buffer = "";
+  }
 }

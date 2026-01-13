@@ -2,7 +2,7 @@ import { useState } from "react";
 import Markdown from "react-markdown";
 import { cn } from "../lib/utils";
 import type { ClaudeMessage } from "../store/sessionStore";
-import { Bot, User, Wrench, AlertCircle, Brain, ShieldQuestion, ChevronDown, ChevronRight, type LucideIcon } from "lucide-react";
+import { Bot, User, Wrench, AlertCircle, Brain, ShieldQuestion, FileText, ChevronDown, ChevronRight, type LucideIcon } from "lucide-react";
 
 interface MessageBubbleProps {
   message: ClaudeMessage;
@@ -13,6 +13,7 @@ const iconMap: Record<ClaudeMessage["type"], LucideIcon> = {
   user: User,
   error: AlertCircle,
   tool_use: Wrench,
+  tool_result: FileText,
   thinking: Brain,
   assistant: Bot,
   system: Bot,
@@ -23,6 +24,7 @@ const styleMap: Record<ClaudeMessage["type"], { bg: string; iconBg: string }> = 
   user: { bg: "bg-blue-900/30 ml-8", iconBg: "bg-blue-600" },
   error: { bg: "bg-red-900/30", iconBg: "bg-red-600" },
   tool_use: { bg: "bg-amber-900/20", iconBg: "bg-amber-600" },
+  tool_result: { bg: "bg-slate-700/30", iconBg: "bg-slate-500" },
   thinking: { bg: "bg-purple-900/20", iconBg: "bg-purple-600" },
   assistant: { bg: "bg-slate-800/50 mr-8", iconBg: "bg-emerald-600" },
   system: { bg: "bg-slate-800/50 mr-8", iconBg: "bg-emerald-600" },
@@ -33,6 +35,7 @@ const labelMap: Record<ClaudeMessage["type"], string> = {
   user: "あなた",
   error: "エラー",
   tool_use: "",
+  tool_result: "実行結果",
   thinking: "思考中",
   assistant: "Claude",
   system: "Claude",

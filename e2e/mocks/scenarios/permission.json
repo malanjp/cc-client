@@ -1,0 +1,98 @@
+{
+  "name": "permission",
+  "messages": [
+    {
+      "inputPattern": "edit|write|modify|create|delete",
+      "responses": [
+        {
+          "type": "assistant",
+          "delay": 100,
+          "data": {
+            "type": "assistant",
+            "message": {
+              "role": "assistant",
+              "content": "I need permission to make changes."
+            }
+          }
+        },
+        {
+          "type": "permission_request",
+          "delay": 100,
+          "data": {
+            "type": "permission_request",
+            "permission_request": {
+              "id": "perm_001",
+              "tool": "Edit",
+              "description": "Edit file /path/to/file.ts"
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "approvalHandler": {
+    "onApprove": [
+      {
+        "type": "assistant",
+        "delay": 100,
+        "data": {
+          "type": "assistant",
+          "message": {
+            "role": "assistant",
+            "content": "Permission granted. I've made the changes successfully."
+          }
+        }
+      },
+      {
+        "type": "result",
+        "delay": 50,
+        "data": {
+          "type": "result",
+          "result": { "success": true }
+        }
+      }
+    ],
+    "onReject": [
+      {
+        "type": "assistant",
+        "delay": 100,
+        "data": {
+          "type": "assistant",
+          "message": {
+            "role": "assistant",
+            "content": "Permission denied. I won't make any changes."
+          }
+        }
+      },
+      {
+        "type": "result",
+        "delay": 50,
+        "data": {
+          "type": "result",
+          "result": { "success": false, "error": "Permission denied by user" }
+        }
+      }
+    ]
+  },
+  "defaultResponses": [
+    {
+      "type": "assistant",
+      "delay": 100,
+      "data": {
+        "type": "assistant",
+        "message": {
+          "role": "assistant",
+          "content": "I can help with file modifications. What would you like me to edit?"
+        }
+      }
+    },
+    {
+      "type": "result",
+      "delay": 50,
+      "data": {
+        "type": "result",
+        "result": { "success": true }
+      }
+    }
+  ]
+}

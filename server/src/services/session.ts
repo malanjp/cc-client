@@ -1,7 +1,7 @@
 import { spawn } from "bun";
 import path from "node:path";
 import { existsSync } from "node:fs";
-import { parseStreamJson, type ClaudeMessage } from "../utils/stream";
+import { PartialJsonParser, type ClaudeMessage } from "../utils/stream";
 
 // Allowed base paths for workDir (customize as needed)
 const ALLOWED_BASE_PATHS = [
@@ -93,16 +93,20 @@ export class ClaudeSession {
   }
 
   async start(): Promise<void> {
-    // コマンドを構築
-    const cmd = [
-      "claude",
-      "--output-format", "stream-json",
-      "--input-format", "stream-json",
-      "--verbose",
-    ];
+    // コマンドを構築（モックスクリプトが指定されている場合はそちらを使用）
+    const mockScript = process.env.MOCK_CLAUDE_SCRIPT;
+    const cmd = mockScript
+      ? ["bun", "run", mockScript]
+      : [
+          "claude",
+          "--print",
+          "--output-format", "stream-json",
+          "--input-format", "stream-json",
+          "--verbose",
+        ];
 
-    // resume モードの場合は --resume オプションを追加
-    if (this.claudeSessionId) {
+    // resume モードの場合は --resume オプションを追加（モックでは無視）
+    if (this.claudeSessionId && !mockScript) {
       cmd.push("--resume", this.claudeSessionId);
     }
 
@@ -135,33 +139,19 @@ export class ClaudeSession {
 
     const reader = stdout.getReader();
     const decoder = new TextDecoder();
-    let buffer = "";
+    const parser = new PartialJsonParser();
 
     try {
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
 
-        buffer += decoder.decode(value, { stream: true });
+        const chunk = decoder.decode(value, { stream: true });
+        const messages = parser.addChunk(chunk);
 
-        const lines = buffer.split("\n");
-        buffer = lines.pop() || "";
-
-        for (const line of lines) {
-          if (line.trim()) {
-            try {
-              const message = parseStreamJson(line);
-              if (message) {
-                this.messageHandlers.forEach((h) => h(message));
-              }
-            } catch (error) {
-              const errMsg = error instanceof Error ? error.message : "Parse error";
-              console.error("[Session] Parse error:", errMsg, "Line:", line.substring(0, 100));
-              this.errorHandlers.forEach((h) =>
-                h(new Error(`Failed to parse Claude response: ${errMsg}`))
-              );
-            }
-          }
+        // チャンク到着ごとに即座にメッセージを配信（ストリーミング）
+        for (const message of messages) {
+          this.messageHandlers.forEach((h) => h(message));
         }
       }
     } catch (error) {

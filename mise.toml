@@ -1,2 +1,140 @@
 [tools]
 node = "22"
+bun = "latest"
+
+# =============================================================================
+# Development
+# =============================================================================
+
+[tasks.dev]
+description = "Start both server and PWA in dev mode"
+run = """
+#!/usr/bin/env bash
+trap 'kill $(jobs -p) 2>/dev/null' EXIT
+cd server && bun run dev &
+cd pwa && npm run dev &
+wait
+"""
+
+[tasks."dev:server"]
+description = "Start bridge server in dev mode"
+dir = "server"
+run = "bun run dev"
+
+[tasks."dev:pwa"]
+description = "Start PWA in dev mode"
+dir = "pwa"
+run = "npm run dev"
+
+# =============================================================================
+# Testing
+# =============================================================================
+
+[tasks.test]
+description = "Run all tests (server unit + e2e)"
+depends = ["test:server", "test:e2e"]
+
+[tasks."test:server"]
+description = "Run server unit tests"
+dir = "server"
+run = "bun test"
+
+[tasks."test:e2e"]
+description = "Run E2E tests with mock Claude CLI"
+dir = "e2e"
+run = "npm test"
+
+[tasks."test:e2e:watch"]
+description = "Run E2E tests in watch mode"
+dir = "e2e"
+run = "npm run test:watch"
+
+[tasks."test:e2e:ui"]
+description = "Run E2E tests with UI"
+dir = "e2e"
+run = "npm run test:ui"
+
+[tasks."test:e2e:real"]
+description = "Run E2E tests with real Claude CLI"
+dir = "e2e"
+run = "REAL_CLAUDE=true npm test"
+
+# =============================================================================
+# Type Checking
+# =============================================================================
+
+[tasks.typecheck]
+description = "Run typecheck for all projects"
+depends = ["typecheck:pwa"]
+
+[tasks."typecheck:pwa"]
+description = "Run PWA typecheck"
+dir = "pwa"
+run = "npm run typecheck"
+
+# =============================================================================
+# Linting
+# =============================================================================
+
+[tasks.lint]
+description = "Run linting for all projects"
+depends = ["lint:server", "lint:pwa"]
+
+[tasks."lint:server"]
+description = "Run server linting (tsc)"
+dir = "server"
+run = "bunx tsc --noEmit"
+
+[tasks."lint:pwa"]
+description = "Run PWA linting (tsc)"
+dir = "pwa"
+run = "npx tsc --noEmit"
+
+# =============================================================================
+# Build
+# =============================================================================
+
+[tasks.build]
+description = "Build PWA for production"
+dir = "pwa"
+run = "npm run build"
+
+# =============================================================================
+# Install
+# =============================================================================
+
+[tasks.install]
+description = "Install all dependencies"
+run = """
+#!/usr/bin/env bash
+set -e
+echo "Installing server dependencies..."
+cd server && bun install
+echo "Installing PWA dependencies..."
+cd ../pwa && npm install
+echo "Installing E2E dependencies..."
+cd ../e2e && npm install
+echo "Done!"
+"""
+
+# =============================================================================
+# Clean
+# =============================================================================
+
+[tasks.clean]
+description = "Clean build artifacts and node_modules"
+run = """
+#!/usr/bin/env bash
+rm -rf pwa/build pwa/.react-router
+rm -rf server/node_modules pwa/node_modules e2e/node_modules
+echo "Cleaned!"
+"""
+
+# =============================================================================
+# Start (Production)
+# =============================================================================
+
+[tasks.start]
+description = "Start server in production mode"
+dir = "server"
+run = "bun run start"

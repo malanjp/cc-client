@@ -80,10 +80,22 @@ export function useWebSocket() {
             break;
           }
 
+          // userメッセージからtool_resultブロックを抽出して表示
+          if (messageType === "user") {
+            const toolResults = extractToolResults(data);
+            for (const msg of toolResults) {
+              addMessage(msg);
+            }
+            break;
+          }
+
           const content = extractContent(data);
 
+          // 表示対象のメッセージタイプ
+          const displayableTypes = ["assistant", "tool_use", "thinking", "system"];
+
           // 空コンテンツまたは表示対象外のタイプはスキップ
-          if (!content || !["assistant", "tool_use", "thinking"].includes(messageType)) {
+          if (!content || !displayableTypes.includes(messageType)) {
             break;
           }
 
@@ -404,7 +416,11 @@ export function useWebSocket() {
   );
 
   const fetchClaudeSessionMessages = useCallback(
-    async (projectId: string, sessionId: string) => {
+    async (
+      projectId: string,
+      sessionId: string,
+      options?: { showSystemMessage?: boolean }
+    ) => {
       if (!serverUrl) return;
       try {
         const res = await fetch(
@@ -435,14 +451,16 @@ export function useWebSocket() {
         loadMessages(messages);
         setViewingClaudeHistory(true);
 
-        // 履歴閲覧中の通知
-        addMessage({
-          id: crypto.randomUUID(),
-          type: "system",
-          content:
-            "Claude CLI の過去のセッション履歴を表示しています。「セッション再開」で続きから会話できます。",
-          timestamp: Date.now(),
-        });
+        // 履歴閲覧中の通知（オプションで非表示可能）
+        if (options?.showSystemMessage !== false) {
+          addMessage({
+            id: crypto.randomUUID(),
+            type: "system",
+            content:
+              "Claude CLI の過去のセッション履歴を表示しています。「セッション再開」で続きから会話できます。",
+            timestamp: Date.now(),
+          });
+        }
       } catch (error) {
         console.error("[WS] Failed to fetch Claude session messages:", error);
         addMessage({
@@ -500,6 +518,47 @@ function extractContent(data: Record<string, unknown>): string {
     .filter((block) => block.type === "text")
     .map((block) => block.text || "")
     .join("\n");
+}
+
+interface ToolResultBlock {
+  type: "tool_result";
+  tool_use_id: string;
+  content?: string;
+  is_error?: boolean;
+}
+
+function isToolResultBlock(block: unknown): block is ToolResultBlock {
+  return (
+    typeof block === "object" &&
+    block !== null &&
+    (block as Record<string, unknown>).type === "tool_result"
+  );
+}
+
+/**
+ * userメッセージからtool_resultブロックを抽出してClaudeMessage形式に変換
+ */
+function extractToolResults(data: Record<string, unknown>): import("../store/sessionStore").ClaudeMessage[] {
+  const message = data.message as {
+    content?: unknown[];
+  } | undefined;
+
+  if (!message?.content || !Array.isArray(message.content)) {
+    return [];
+  }
+
+  return message.content
+    .filter(isToolResultBlock)
+    .map((block) => ({
+      id: crypto.randomUUID(),
+      type: "tool_result" as const,
+      content: typeof block.content === "string" ? block.content : JSON.stringify(block.content ?? ""),
+      timestamp: Date.now(),
+      toolResult: {
+        toolUseId: block.tool_use_id,
+        isError: block.is_error,
+      },
+    }));
 }
 
 function isToolUse(value: unknown): value is { name: string } {

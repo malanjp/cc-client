@@ -105,6 +105,11 @@ export class AgentBrowser {
     await this.run(`find text "${text}" click`);
   }
 
+  // プレースホルダーで要素を見つけてテキスト入力
+  async fillByPlaceholder(placeholder: string, text: string): Promise<void> {
+    await this.run(`find placeholder "${placeholder}" fill "${text}"`);
+  }
+
   async click(ref: string): Promise<void> {
     await this.run(`click ${ref}`);
   }

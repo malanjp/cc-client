@@ -1,0 +1,69 @@
+{
+  "name": "error",
+  "messages": [
+    {
+      "inputPattern": "fail|error|crash",
+      "responses": [
+        {
+          "type": "assistant",
+          "delay": 100,
+          "data": {
+            "type": "assistant",
+            "message": {
+              "role": "assistant",
+              "content": "An error occurred while processing your request."
+            }
+          }
+        },
+        {
+          "type": "result",
+          "delay": 50,
+          "data": {
+            "type": "result",
+            "result": {
+              "success": false,
+              "error": "Simulated error for testing"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "inputPattern": "invalid|bad",
+      "responses": [
+        {
+          "type": "result",
+          "delay": 100,
+          "data": {
+            "type": "result",
+            "result": {
+              "success": false,
+              "error": "Invalid request format"
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "defaultResponses": [
+    {
+      "type": "assistant",
+      "delay": 100,
+      "data": {
+        "type": "assistant",
+        "message": {
+          "role": "assistant",
+          "content": "This is the error scenario. Try sending 'fail' or 'error' to simulate errors."
+        }
+      }
+    },
+    {
+      "type": "result",
+      "delay": 50,
+      "data": {
+        "type": "result",
+        "result": { "success": true }
+      }
+    }
+  ]
+}

@@ -1,5 +1,5 @@
 import { useCallback, useEffect } from "react";
-import { X, Plus, Eye, FolderOpen, History, ChevronRight, RotateCcw } from "lucide-react";
+import { X, Plus, FolderOpen, History, ChevronRight, RotateCcw } from "lucide-react";
 import { cn } from "../lib/utils";
 import {
   useSessionStore,
@@ -45,20 +45,15 @@ export function Sidebar({ isOpen, onClose, onNewSession }: SidebarProps) {
     [setSelectedClaudeProjectId]
   );
 
-  const handleViewClaudeHistory = useCallback(
-    (session: ClaudeSessionSummary) => {
-      fetchClaudeSessionMessages(session.projectId, session.id);
-      onClose();
-    },
-    [fetchClaudeSessionMessages, onClose]
-  );
-
   const handleResumeClaudeSession = useCallback(
     (session: ClaudeSessionSummary, workDir: string) => {
+      // 先に履歴を取得（システムメッセージなし）
+      fetchClaudeSessionMessages(session.projectId, session.id, { showSystemMessage: false });
+      // セッションを再開
       resumeClaudeSession(session.id, workDir);
       onClose();
     },
-    [resumeClaudeSession, onClose]
+    [fetchClaudeSessionMessages, resumeClaudeSession, onClose]
   );
 
   return (
@@ -122,7 +117,6 @@ export function Sidebar({ isOpen, onClose, onNewSession }: SidebarProps) {
             sessions={claudeSessions}
             selectedProjectId={selectedClaudeProjectId}
             onSelectProject={handleSelectClaudeProject}
-            onViewHistory={handleViewClaudeHistory}
             onResumeSession={handleResumeClaudeSession}
           />
         </div>
@@ -137,7 +131,6 @@ interface ClaudeHistoryBrowserProps {
   sessions: ClaudeSessionSummary[];
   selectedProjectId: string | null;
   onSelectProject: (project: ClaudeProject) => void;
-  onViewHistory: (session: ClaudeSessionSummary) => void;
   onResumeSession: (session: ClaudeSessionSummary, workDir: string) => void;
 }
 
@@ -146,7 +139,6 @@ function ClaudeHistoryBrowser({
   sessions,
   selectedProjectId,
   onSelectProject,
-  onViewHistory,
   onResumeSession,
 }: ClaudeHistoryBrowserProps) {
   const selectedProject = projects.find((p) => p.id === selectedProjectId);
@@ -214,14 +206,7 @@ function ClaudeHistoryBrowser({
             <p className="text-xs text-slate-500 mt-1">
               {new Date(session.timestamp).toLocaleString("ja-JP")} · {session.messageCount} messages
             </p>
-            <div className="flex gap-2 mt-2">
-              <button
-                onClick={() => onViewHistory(session)}
-                className="flex items-center gap-1 px-2 py-1 text-xs rounded bg-slate-700 hover:bg-slate-600 text-slate-300 transition-colors"
-              >
-                <Eye className="w-3 h-3" />
-                履歴閲覧
-              </button>
+            <div className="mt-2">
               <button
                 onClick={() => onResumeSession(session, selectedProject?.path || "")}
                 className="flex items-center gap-1 px-2 py-1 text-xs rounded bg-green-900/50 hover:bg-green-800/50 text-green-400 transition-colors"

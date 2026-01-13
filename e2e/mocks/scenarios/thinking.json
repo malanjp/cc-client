@@ -1,0 +1,74 @@
+{
+  "name": "thinking",
+  "messages": [
+    {
+      "inputPattern": "think|analyze|complex",
+      "responses": [
+        {
+          "type": "thinking",
+          "delay": 100,
+          "data": {
+            "type": "thinking",
+            "thinking": "Let me analyze this step by step..."
+          }
+        },
+        {
+          "type": "thinking",
+          "delay": 200,
+          "data": {
+            "type": "thinking",
+            "thinking": "Considering the different approaches..."
+          }
+        },
+        {
+          "type": "assistant",
+          "delay": 300,
+          "data": {
+            "type": "assistant",
+            "message": {
+              "role": "assistant",
+              "content": "After careful analysis, here's my conclusion:\n\n1. The first approach is more efficient\n2. It requires less memory\n3. The implementation is straightforward"
+            }
+          }
+        },
+        {
+          "type": "result",
+          "delay": 50,
+          "data": {
+            "type": "result",
+            "result": { "success": true }
+          }
+        }
+      ]
+    }
+  ],
+  "defaultResponses": [
+    {
+      "type": "thinking",
+      "delay": 100,
+      "data": {
+        "type": "thinking",
+        "thinking": "Processing your request..."
+      }
+    },
+    {
+      "type": "assistant",
+      "delay": 200,
+      "data": {
+        "type": "assistant",
+        "message": {
+          "role": "assistant",
+          "content": "I've processed your request."
+        }
+      }
+    },
+    {
+      "type": "result",
+      "delay": 50,
+      "data": {
+        "type": "result",
+        "result": { "success": true }
+      }
+    }
+  ]
+}

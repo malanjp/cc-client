@@ -1,0 +1,114 @@
+{
+  "name": "tool-use",
+  "messages": [
+    {
+      "inputPattern": "read.*file|show.*file",
+      "responses": [
+        {
+          "type": "assistant",
+          "delay": 100,
+          "data": {
+            "type": "assistant",
+            "message": {
+              "role": "assistant",
+              "content": "I'll read that file for you."
+            }
+          }
+        },
+        {
+          "type": "tool_use",
+          "delay": 100,
+          "data": {
+            "type": "tool_use",
+            "tool_use": {
+              "id": "tool_123",
+              "name": "Read",
+              "input": {
+                "file_path": "/path/to/file.txt"
+              }
+            }
+          }
+        },
+        {
+          "type": "assistant",
+          "delay": 200,
+          "data": {
+            "type": "assistant",
+            "message": {
+              "role": "assistant",
+              "content": "Here's the content of the file:\n\n```\nHello, World!\n```"
+            }
+          }
+        },
+        {
+          "type": "result",
+          "delay": 50,
+          "data": {
+            "type": "result",
+            "result": { "success": true }
+          }
+        }
+      ]
+    },
+    {
+      "inputPattern": "search|find|grep",
+      "responses": [
+        {
+          "type": "tool_use",
+          "delay": 100,
+          "data": {
+            "type": "tool_use",
+            "tool_use": {
+              "id": "tool_456",
+              "name": "Grep",
+              "input": {
+                "pattern": "TODO",
+                "path": "."
+              }
+            }
+          }
+        },
+        {
+          "type": "assistant",
+          "delay": 200,
+          "data": {
+            "type": "assistant",
+            "message": {
+              "role": "assistant",
+              "content": "Found 3 matches for 'TODO' in the codebase."
+            }
+          }
+        },
+        {
+          "type": "result",
+          "delay": 50,
+          "data": {
+            "type": "result",
+            "result": { "success": true }
+          }
+        }
+      ]
+    }
+  ],
+  "defaultResponses": [
+    {
+      "type": "assistant",
+      "delay": 100,
+      "data": {
+        "type": "assistant",
+        "message": {
+          "role": "assistant",
+          "content": "I can help you with file operations. Try asking me to read or search for files."
+        }
+      }
+    },
+    {
+      "type": "result",
+      "delay": 50,
+      "data": {
+        "type": "result",
+        "result": { "success": true }
+      }
+    }
+  ]
+}

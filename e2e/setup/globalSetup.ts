@@ -10,6 +10,11 @@ const PROJECT_ROOT = join(__dirname, "../..");
 const BRIDGE_PORT = 8080;
 const PWA_PORT = 5173;
 
+// モック Claude CLI のパス
+const MOCK_CLAUDE_SCRIPT = join(PROJECT_ROOT, "e2e/mocks/mock-claude.ts");
+// モックを使用するかどうか（REAL_CLAUDE=true で実際の Claude CLI を使用）
+const USE_MOCK = process.env.REAL_CLAUDE !== "true";
+
 let bridgeProcess: ChildProcess | null = null;
 let pwaProcess: ChildProcess | null = null;
 
@@ -39,9 +44,23 @@ export async function setup() {
 
   // Bridge Server 起動
   const serverDir = join(PROJECT_ROOT, "server");
+  const serverEnv: Record<string, string> = {
+    ...process.env as Record<string, string>,
+    PORT: String(BRIDGE_PORT),
+  };
+
+  // モックモードの場合は環境変数を追加
+  if (USE_MOCK) {
+    serverEnv.MOCK_CLAUDE_SCRIPT = MOCK_CLAUDE_SCRIPT;
+    serverEnv.MOCK_SCENARIO = process.env.MOCK_SCENARIO ?? "basic-chat";
+    console.log(`[GlobalSetup] Using mock Claude CLI (scenario: ${serverEnv.MOCK_SCENARIO})`);
+  } else {
+    console.log("[GlobalSetup] Using real Claude CLI");
+  }
+
   bridgeProcess = spawn("bun", ["run", "src/index.ts"], {
     cwd: serverDir,
-    env: { ...process.env, PORT: String(BRIDGE_PORT) },
+    env: serverEnv,
     stdio: "pipe",
   });
 

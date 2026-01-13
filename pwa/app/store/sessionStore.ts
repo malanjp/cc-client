@@ -5,11 +5,15 @@ const MAX_MESSAGES = 1000;
 
 export interface ClaudeMessage {
   id: string;
-  type: "assistant" | "user" | "system" | "tool_use" | "error" | "thinking" | "permission_request";
+  type: "assistant" | "user" | "system" | "tool_use" | "tool_result" | "error" | "thinking" | "permission_request";
   content: string;
   timestamp: number;
   toolName?: string;
   toolInput?: Record<string, unknown>;
+  toolResult?: {
+    toolUseId: string;
+    isError?: boolean;
+  };
   permissionRequest?: {
     id: string;
     tool: string;

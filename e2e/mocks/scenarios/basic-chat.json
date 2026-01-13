@@ -1,0 +1,74 @@
+{
+  "name": "basic-chat",
+  "messages": [
+    {
+      "inputPattern": "^hello",
+      "responses": [
+        {
+          "type": "assistant",
+          "delay": 100,
+          "data": {
+            "type": "assistant",
+            "message": {
+              "role": "assistant",
+              "content": "Hello! How can I help you today?"
+            }
+          }
+        },
+        {
+          "type": "result",
+          "delay": 50,
+          "data": {
+            "type": "result",
+            "result": { "success": true }
+          }
+        }
+      ]
+    },
+    {
+      "inputPattern": "^help",
+      "responses": [
+        {
+          "type": "assistant",
+          "delay": 100,
+          "data": {
+            "type": "assistant",
+            "message": {
+              "role": "assistant",
+              "content": "I'm Claude, an AI assistant. I can help you with:\n- Answering questions\n- Writing code\n- Explaining concepts\n\nWhat would you like to know?"
+            }
+          }
+        },
+        {
+          "type": "result",
+          "delay": 50,
+          "data": {
+            "type": "result",
+            "result": { "success": true }
+          }
+        }
+      ]
+    }
+  ],
+  "defaultResponses": [
+    {
+      "type": "assistant",
+      "delay": 100,
+      "data": {
+        "type": "assistant",
+        "message": {
+          "role": "assistant",
+          "content": "I understand. Let me help you with that."
+        }
+      }
+    },
+    {
+      "type": "result",
+      "delay": 50,
+      "data": {
+        "type": "result",
+        "result": { "success": true }
+      }
+    }
+  ]
+}
