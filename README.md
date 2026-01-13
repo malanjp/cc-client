@@ -43,6 +43,13 @@ bun run dev
 
 サーバーは `http://localhost:8080` で起動します。
 
+環境変数の設定（オプション）：
+
+```bash
+cp .env.example .env
+# 必要に応じて .env を編集
+```
+
 ### PWA（開発時）
 
 ```bash
@@ -52,6 +59,39 @@ npm run dev
 ```
 
 PWAは `http://localhost:5173` で起動します。
+
+環境変数の設定（オプション）：
+
+```bash
+cp .env.example .env
+# VITE_SERVER_URL でデフォルトのサーバーURLを設定
+```
+
+### Tailscale経由でのアクセス
+
+外部デバイス（Android等）からTailscale経由でアクセスするには、以下の設定が必要です：
+
+1. **TailscaleのIPアドレスを確認**
+   ```bash
+   tailscale ip -4
+   # 例: 100.125.53.98
+   ```
+
+2. **Bridge Serverの設定**（`server/.env`）
+   ```bash
+   # CORSにTailscale IPを追加
+   CORS_ORIGINS=http://localhost:5173,http://100.x.x.x:5173
+   ```
+
+3. **PWAの設定**（`pwa/.env`）
+   ```bash
+   # デフォルトサーバーURLをTailscale IPに設定
+   VITE_SERVER_URL=http://100.x.x.x:8080
+   ```
+
+4. **アクセス**
+   - PWA: `http://<Tailscale IP>:5173`
+   - Bridge Server: `http://<Tailscale IP>:8080`
 
 ## 使い方
 

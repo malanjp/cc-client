@@ -80,8 +80,14 @@ export interface SessionState {
   reset: () => void;
 }
 
+// Default server URL from environment variable (Vite exposes VITE_ prefixed vars)
+const defaultServerUrl =
+  typeof import.meta !== "undefined" && import.meta.env?.VITE_SERVER_URL
+    ? import.meta.env.VITE_SERVER_URL
+    : "";
+
 const initialState = {
-  serverUrl: "",
+  serverUrl: defaultServerUrl,
   isConnected: false,
   isConnecting: false,
   connectionError: null,

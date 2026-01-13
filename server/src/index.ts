@@ -50,6 +50,7 @@ console.log(`Bridge Server starting on port ${port}...`);
 // Bun server with WebSocket support
 const server = Bun.serve({
   port,
+  hostname: "0.0.0.0",
   fetch(req, server) {
     const url = new URL(req.url);
 
