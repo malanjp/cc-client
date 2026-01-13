@@ -11,6 +11,10 @@ const ALLOWED_BASE_PATHS = [
   "/tmp",
 ];
 
+// Session timeout configuration
+const SESSION_TIMEOUT_MS = Number(process.env.SESSION_TIMEOUT_MS) || 30 * 60 * 1000; // 30 minutes
+const TIMEOUT_CHECK_INTERVAL_MS = 60 * 1000; // 1 minute
+
 export function isValidWorkDir(workDir: string): { valid: boolean; error?: string } {
   // Normalize the path to prevent traversal attacks
   const normalized = path.resolve(workDir);
@@ -54,6 +58,7 @@ export class ClaudeSession {
   workDir: string;
   createdAt: number;
   updatedAt: number;
+  lastActivity: number;
   status: "active" | "ended" = "active";
 
   private process: ClaudeProcess | null = null;
@@ -68,6 +73,21 @@ export class ClaudeSession {
     const now = Date.now();
     this.createdAt = now;
     this.updatedAt = now;
+    this.lastActivity = now;
+  }
+
+  /**
+   * 最終アクティビティ時刻を更新
+   */
+  touch(): void {
+    this.lastActivity = Date.now();
+  }
+
+  /**
+   * タイムアウトしているかチェック
+   */
+  isTimedOut(): boolean {
+    return Date.now() - this.lastActivity > SESSION_TIMEOUT_MS;
   }
 
   async start(): Promise<void> {
@@ -203,6 +223,7 @@ export class ClaudeSession {
   }
 
   async sendMessage(message: string): Promise<void> {
+    this.touch();
     this.writeToStdin({
       type: "user",
       message: { role: "user", content: message },
@@ -277,12 +298,48 @@ export class ClaudeSession {
 class SessionManager {
   private sessions = new Map<string, ClaudeSession>();
   private sessionRepo: SessionRepository;
+  private timeoutCheckTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor() {
     this.sessionRepo = new SessionRepository(dbManager.getDb());
     // サーバー起動時に全プロセスを非活性化し、ステータスをリセット
     this.sessionRepo.resetAllProcessAlive();
     this.sessionRepo.resetAllActiveStatus();
+
+    // タイムアウトチェッカーを開始
+    this.startTimeoutChecker();
+  }
+
+  /**
+   * 定期的にタイムアウトしたセッションをチェック
+   */
+  private startTimeoutChecker(): void {
+    this.timeoutCheckTimer = setInterval(() => {
+      this.checkTimeouts();
+    }, TIMEOUT_CHECK_INTERVAL_MS);
+  }
+
+  /**
+   * タイムアウトしたセッションを終了
+   */
+  private checkTimeouts(): void {
+    const now = Date.now();
+    for (const [id, session] of this.sessions) {
+      if (session.isTimedOut()) {
+        console.log(`[SessionManager] Session ${id} timed out (idle for ${Math.round((now - session.lastActivity) / 1000 / 60)} minutes)`);
+        this.endSession(id);
+      }
+    }
+  }
+
+  /**
+   * タイムアウトチェッカーを停止
+   */
+  stopTimeoutChecker(): void {
+    if (this.timeoutCheckTimer) {
+      clearInterval(this.timeoutCheckTimer);
+      this.timeoutCheckTimer = null;
+    }
   }
 
   async createSession(workDir: string): Promise<ClaudeSession> {
@@ -374,6 +431,45 @@ class SessionManager {
       return true;
     }
     return false;
+  }
+
+  /**
+   * 全セッションをシャットダウン（グレースフルシャットダウン用）
+   */
+  async shutdownAll(): Promise<void> {
+    console.log(`[SessionManager] Shutting down ${this.sessions.size} sessions...`);
+
+    // タイムアウトチェッカーを停止
+    this.stopTimeoutChecker();
+
+    const promises: Promise<void>[] = [];
+
+    for (const [id, session] of this.sessions) {
+      promises.push(
+        new Promise((resolve) => {
+          try {
+            session.end();
+            this.sessionRepo.updateStatus(id, "ended");
+            this.sessionRepo.updateProcessAlive(id, false);
+            console.log(`[SessionManager] Session ${id} ended`);
+          } catch (error) {
+            console.error(`[SessionManager] Error ending session ${id}:`, error);
+          }
+          resolve();
+        })
+      );
+    }
+
+    await Promise.all(promises);
+    this.sessions.clear();
+    console.log("[SessionManager] All sessions shut down");
+  }
+
+  /**
+   * アクティブなセッション数を取得
+   */
+  getActiveCount(): number {
+    return this.sessions.size;
   }
 }
 

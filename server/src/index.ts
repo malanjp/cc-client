@@ -3,6 +3,8 @@ import { cors } from "hono/cors";
 import { logger } from "hono/logger";
 import { apiRoutes } from "./routes/api";
 import { createWebSocketHandler } from "./routes/ws";
+import { sessionManager } from "./services/session";
+import { dbManager } from "./db/database";
 
 const app = new Hono();
 
@@ -70,3 +72,43 @@ const server = Bun.serve({
 
 console.log(`Bridge Server running at http://localhost:${server.port}`);
 console.log(`WebSocket available at ws://localhost:${server.port}/ws`);
+
+// Graceful shutdown handler
+let isShuttingDown = false;
+
+async function gracefulShutdown(signal: string): Promise<void> {
+  if (isShuttingDown) {
+    console.log(`[Server] Already shutting down, ignoring ${signal}`);
+    return;
+  }
+
+  isShuttingDown = true;
+  console.log(`\n[Server] Received ${signal}, starting graceful shutdown...`);
+
+  try {
+    // 1. アクティブセッションをシャットダウン
+    const activeCount = sessionManager.getActiveCount();
+    if (activeCount > 0) {
+      console.log(`[Server] Shutting down ${activeCount} active sessions...`);
+      await sessionManager.shutdownAll();
+    }
+
+    // 2. DB 接続を閉じる
+    console.log("[Server] Closing database connection...");
+    dbManager.close();
+
+    // 3. サーバーを停止
+    console.log("[Server] Stopping server...");
+    server.stop();
+
+    console.log("[Server] Graceful shutdown complete");
+    process.exit(0);
+  } catch (error) {
+    console.error("[Server] Error during shutdown:", error);
+    process.exit(1);
+  }
+}
+
+// シグナルハンドラを登録
+process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
+process.on("SIGINT", () => gracefulShutdown("SIGINT"));
