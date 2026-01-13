@@ -1,5 +1,10 @@
-import { useCallback, useRef, useEffect } from "react";
-import { useSessionStore, type ClaudeMessage } from "../store/sessionStore";
+import { useCallback, useRef } from "react";
+import {
+  useSessionStore,
+  type ClaudeMessage,
+  type ClaudeProject,
+  type ClaudeSessionSummary,
+} from "../store/sessionStore";
 
 // Singleton WebSocket instance to prevent multiple connections
 let globalWs: WebSocket | null = null;
@@ -22,9 +27,9 @@ export function useWebSocket() {
     isConnected,
     isConnecting,
     isResponding,
-    isViewingHistory,
     isReconnecting,
     reconnectAttempts,
+    isViewingClaudeHistory,
     setConnected,
     setConnecting,
     setConnectionError,
@@ -34,8 +39,9 @@ export function useWebSocket() {
     setResponding,
     addMessage,
     loadMessages,
-    setAvailableSessions,
-    setViewingHistory,
+    setClaudeProjects,
+    setClaudeSessions,
+    setViewingClaudeHistory,
   } = useSessionStore();
 
   const handleMessage = useCallback(
@@ -49,6 +55,7 @@ export function useWebSocket() {
 
         case "session_created":
           setSessionId(data.sessionId as string);
+          setViewingClaudeHistory(false);
           break;
 
         case "claude_message": {
@@ -108,57 +115,26 @@ export function useWebSocket() {
 
         case "session_ended":
           setSessionId(null);
-          setViewingHistory(false);
           break;
-
-        case "session_history": {
-          // DB から取得したメッセージ履歴を変換してロード
-          const rawMessages = data.messages as Array<{
-            id: string;
-            type: string;
-            content: string;
-            timestamp: number;
-            tool_name?: string;
-            tool_input?: string;
-            permission_request?: string;
-          }>;
-          const processAlive = data.processAlive as boolean;
-
-          const messages: ClaudeMessage[] = rawMessages.map((m) => ({
-            id: m.id,
-            type: m.type as ClaudeMessage["type"],
-            content: m.content,
-            timestamp: m.timestamp,
-            toolName: m.tool_name || undefined,
-            toolInput: m.tool_input ? JSON.parse(m.tool_input) : undefined,
-            permissionRequest: m.permission_request
-              ? JSON.parse(m.permission_request)
-              : undefined,
-          }));
-
-          loadMessages(messages);
-          setViewingHistory(!processAlive);
-
-          // プロセスが終了している場合は通知メッセージを追加
-          if (!processAlive) {
-            addMessage({
-              id: crypto.randomUUID(),
-              type: "system",
-              content:
-                "このセッションのプロセスは終了しています。履歴のみ表示されます。新しいメッセージを送信するには新規セッションを作成してください。",
-              timestamp: Date.now(),
-            });
-          }
-          break;
-        }
 
         case "session_attached":
           setSessionId(data.sessionId as string);
-          setViewingHistory(false);
+          setViewingClaudeHistory(false);
+          break;
+
+        case "session_resumed":
+          setSessionId(data.sessionId as string);
+          setViewingClaudeHistory(false);
+          addMessage({
+            id: crypto.randomUUID(),
+            type: "system",
+            content: `セッション ${(data.claudeSessionId as string).slice(0, 8)}... を再開しました`,
+            timestamp: Date.now(),
+          });
           break;
       }
     },
-    [setSessionId, setResponding, addMessage, loadMessages, setViewingHistory]
+    [setSessionId, setResponding, addMessage, setViewingClaudeHistory]
   );
 
   const connect = useCallback((urlOverride?: string, isReconnect = false) => {
@@ -383,13 +359,6 @@ export function useWebSocket() {
     send({ type: "end_session" });
   }, [send]);
 
-  const restoreSession = useCallback(
-    (sessionId: string) => {
-      send({ type: "restore_session", sessionId });
-    },
-    [send]
-  );
-
   const attachSession = useCallback(
     (sessionId: string) => {
       send({ type: "attach_session", sessionId });
@@ -397,17 +366,95 @@ export function useWebSocket() {
     [send]
   );
 
-  const fetchSessions = useCallback(async () => {
+  // Claude CLI 履歴関連のメソッド
+  const resumeClaudeSession = useCallback(
+    (sessionId: string, workDir: string) => {
+      send({ type: "resume_claude_session", sessionId, workDir });
+    },
+    [send]
+  );
+
+  const fetchClaudeProjects = useCallback(async () => {
     if (!serverUrl) return;
     try {
-      const res = await fetch(`${serverUrl}/api/sessions?include_ended=true`);
-      if (!res.ok) throw new Error("Failed to fetch sessions");
+      const res = await fetch(`${serverUrl}/api/claude-projects`);
+      if (!res.ok) throw new Error("Failed to fetch Claude projects");
       const data = await res.json();
-      setAvailableSessions(data.sessions || []);
+      setClaudeProjects((data.projects || []) as ClaudeProject[]);
     } catch (error) {
-      console.error("[WS] Failed to fetch sessions:", error);
+      console.error("[WS] Failed to fetch Claude projects:", error);
     }
-  }, [serverUrl, setAvailableSessions]);
+  }, [serverUrl, setClaudeProjects]);
+
+  const fetchClaudeSessions = useCallback(
+    async (projectId: string) => {
+      if (!serverUrl) return;
+      try {
+        const res = await fetch(
+          `${serverUrl}/api/claude-projects/${encodeURIComponent(projectId)}/sessions`
+        );
+        if (!res.ok) throw new Error("Failed to fetch Claude sessions");
+        const data = await res.json();
+        setClaudeSessions((data.sessions || []) as ClaudeSessionSummary[]);
+      } catch (error) {
+        console.error("[WS] Failed to fetch Claude sessions:", error);
+      }
+    },
+    [serverUrl, setClaudeSessions]
+  );
+
+  const fetchClaudeSessionMessages = useCallback(
+    async (projectId: string, sessionId: string) => {
+      if (!serverUrl) return;
+      try {
+        const res = await fetch(
+          `${serverUrl}/api/claude-projects/${encodeURIComponent(projectId)}/sessions/${sessionId}/messages`
+        );
+        if (!res.ok) throw new Error("Failed to fetch Claude session messages");
+        const data = await res.json();
+
+        // メッセージを ClaudeMessage 形式に変換
+        const messages: ClaudeMessage[] = (
+          data.messages as Array<{
+            uuid: string;
+            type: string;
+            content: string;
+            timestamp: string;
+            toolName?: string;
+            toolInput?: Record<string, unknown>;
+          }>
+        ).map((m) => ({
+          id: m.uuid,
+          type: m.type as ClaudeMessage["type"],
+          content: m.content,
+          timestamp: new Date(m.timestamp).getTime(),
+          toolName: m.toolName,
+          toolInput: m.toolInput,
+        }));
+
+        loadMessages(messages);
+        setViewingClaudeHistory(true);
+
+        // 履歴閲覧中の通知
+        addMessage({
+          id: crypto.randomUUID(),
+          type: "system",
+          content:
+            "Claude CLI の過去のセッション履歴を表示しています。「セッション再開」で続きから会話できます。",
+          timestamp: Date.now(),
+        });
+      } catch (error) {
+        console.error("[WS] Failed to fetch Claude session messages:", error);
+        addMessage({
+          id: crypto.randomUUID(),
+          type: "error",
+          content: "セッション履歴の取得に失敗しました",
+          timestamp: Date.now(),
+        });
+      }
+    },
+    [serverUrl, loadMessages, setViewingClaudeHistory, addMessage]
+  );
 
   return {
     connect,
@@ -419,15 +466,18 @@ export function useWebSocket() {
     reject,
     abort,
     endSession,
-    restoreSession,
     attachSession,
-    fetchSessions,
+    // Claude CLI 履歴関連
+    resumeClaudeSession,
+    fetchClaudeProjects,
+    fetchClaudeSessions,
+    fetchClaudeSessionMessages,
     isConnected,
     isConnecting,
     isResponding,
-    isViewingHistory,
     isReconnecting,
     reconnectAttempts,
+    isViewingClaudeHistory,
   };
 }
 

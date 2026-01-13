@@ -1,5 +1,7 @@
 /**
  * SQLite データベース接続管理
+ * Note: sessions/messages テーブルは削除されました。
+ * 将来の拡張用に DB 接続機能を維持しています。
  */
 import { Database } from "bun:sqlite";
 import { mkdirSync, existsSync } from "node:fs";
@@ -43,8 +45,10 @@ class DatabaseManager {
     this.db.exec("PRAGMA foreign_keys = ON");
     this.db.exec("PRAGMA journal_mode = WAL");
 
-    // スキーマ作成
-    this.db.exec(SCHEMA);
+    // スキーマ作成（空でなければ実行）
+    if (SCHEMA.trim() && !SCHEMA.trim().startsWith("--")) {
+      this.db.exec(SCHEMA);
+    }
   }
 
   /**

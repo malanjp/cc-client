@@ -2,8 +2,6 @@ import { spawn } from "bun";
 import path from "node:path";
 import { existsSync } from "node:fs";
 import { parseStreamJson, type ClaudeMessage } from "../utils/stream";
-import { dbManager } from "../db/database";
-import { SessionRepository } from "../db/repositories/sessionRepository";
 
 // Allowed base paths for workDir (customize as needed)
 const ALLOWED_BASE_PATHS = [
@@ -48,7 +46,8 @@ export interface SessionInfo {
   createdAt: number;
   updatedAt: number;
   status: "active" | "ended";
-  processAlive: boolean;
+  /** Claude CLI の元セッションID（resume で作成した場合のみ） */
+  claudeSessionId?: string | null;
 }
 
 type ClaudeProcess = Awaited<ReturnType<typeof spawn>>;
@@ -60,6 +59,8 @@ export class ClaudeSession {
   updatedAt: number;
   lastActivity: number;
   status: "active" | "ended" = "active";
+  /** Claude CLI の元セッションID（resume 時に使用） */
+  claudeSessionId: string | null = null;
 
   private process: ClaudeProcess | null = null;
   private messageHandlers: ((msg: ClaudeMessage) => void)[] = [];
@@ -67,9 +68,10 @@ export class ClaudeSession {
   private endHandlers: (() => void)[] = [];
   private endHandlersCalled = false;
 
-  constructor(workDir: string) {
+  constructor(workDir: string, claudeSessionId?: string) {
     this.id = crypto.randomUUID();
     this.workDir = workDir;
+    this.claudeSessionId = claudeSessionId || null;
     const now = Date.now();
     this.createdAt = now;
     this.updatedAt = now;
@@ -91,14 +93,22 @@ export class ClaudeSession {
   }
 
   async start(): Promise<void> {
+    // コマンドを構築
+    const cmd = [
+      "claude",
+      "--output-format", "stream-json",
+      "--input-format", "stream-json",
+      "--verbose",
+    ];
+
+    // resume モードの場合は --resume オプションを追加
+    if (this.claudeSessionId) {
+      cmd.push("--resume", this.claudeSessionId);
+    }
+
     try {
       this.process = spawn({
-        cmd: [
-          "claude",
-          "--output-format", "stream-json",
-          "--input-format", "stream-json",
-          "--verbose",
-        ],
+        cmd,
         cwd: this.workDir,
         stdin: "pipe",
         stdout: "pipe",
@@ -274,7 +284,7 @@ export class ClaudeSession {
       createdAt: this.createdAt,
       updatedAt: this.updatedAt,
       status: this.status,
-      processAlive: this.status === "active",
+      claudeSessionId: this.claudeSessionId,
     };
   }
 
@@ -297,15 +307,9 @@ export class ClaudeSession {
 
 class SessionManager {
   private sessions = new Map<string, ClaudeSession>();
-  private sessionRepo: SessionRepository;
   private timeoutCheckTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor() {
-    this.sessionRepo = new SessionRepository(dbManager.getDb());
-    // サーバー起動時に全プロセスを非活性化し、ステータスをリセット
-    this.sessionRepo.resetAllProcessAlive();
-    this.sessionRepo.resetAllActiveStatus();
-
     // タイムアウトチェッカーを開始
     this.startTimeoutChecker();
   }
@@ -354,20 +358,8 @@ class SessionManager {
       await session.start();
       this.sessions.set(session.id, session);
 
-      // DB に保存
-      this.sessionRepo.create({
-        id: session.id,
-        work_dir: session.workDir,
-        created_at: session.createdAt,
-        updated_at: session.updatedAt,
-        status: "active",
-        process_alive: 1,
-      });
-
-      // プロセス終了時に DB を更新
+      // プロセス終了時にメモリから削除
       session.onEnd(() => {
-        this.sessionRepo.updateStatus(session.id, "ended");
-        this.sessionRepo.updateProcessAlive(session.id, false);
         this.sessions.delete(session.id);
       });
 
@@ -384,40 +376,49 @@ class SessionManager {
   }
 
   /**
-   * セッション一覧を取得
-   * @param includeEnded 終了済みセッションを含めるか
+   * Claude CLI の既存セッションを再開
+   * @param claudeSessionId Claude CLI のセッションID
+   * @param workDir 作業ディレクトリ
    */
-  listSessions(includeEnded: boolean = false): SessionInfo[] {
-    if (includeEnded) {
-      // DB から全セッションを取得
-      const dbSessions = this.sessionRepo.findAll(true);
-      return dbSessions.map((s) => ({
-        id: s.id,
-        workDir: s.work_dir,
-        createdAt: s.created_at,
-        updatedAt: s.updated_at,
-        status: s.status,
-        processAlive: s.process_alive === 1,
-      }));
+  async resumeSession(claudeSessionId: string, workDir: string): Promise<ClaudeSession> {
+    // Validate workDir before creating session
+    const validation = isValidWorkDir(workDir);
+    if (!validation.valid) {
+      throw new Error(validation.error);
     }
-    // アクティブなセッションのみ（メモリから取得）
+
+    const session = new ClaudeSession(path.resolve(workDir), claudeSessionId);
+    try {
+      await session.start();
+      this.sessions.set(session.id, session);
+
+      // プロセス終了時にメモリから削除
+      session.onEnd(() => {
+        this.sessions.delete(session.id);
+      });
+
+      return session;
+    } catch (error) {
+      // Clean up if start fails
+      session.end();
+      throw error;
+    }
+  }
+
+  /**
+   * アクティブなセッション一覧を取得
+   */
+  listSessions(): SessionInfo[] {
     return Array.from(this.sessions.values()).map((s) => s.getInfo());
   }
 
   /**
-   * DB からセッション情報を取得
+   * メモリ上のセッション情報を取得
    */
   getSessionInfo(id: string): SessionInfo | null {
-    const dbSession = this.sessionRepo.findById(id);
-    if (!dbSession) return null;
-    return {
-      id: dbSession.id,
-      workDir: dbSession.work_dir,
-      createdAt: dbSession.created_at,
-      updatedAt: dbSession.updated_at,
-      status: dbSession.status,
-      processAlive: dbSession.process_alive === 1,
-    };
+    const session = this.sessions.get(id);
+    if (!session) return null;
+    return session.getInfo();
   }
 
   endSession(id: string): boolean {
@@ -425,9 +426,6 @@ class SessionManager {
     if (session) {
       session.end();
       this.sessions.delete(id);
-      // DB のステータスを更新
-      this.sessionRepo.updateStatus(id, "ended");
-      this.sessionRepo.updateProcessAlive(id, false);
       return true;
     }
     return false;
@@ -449,8 +447,6 @@ class SessionManager {
         new Promise((resolve) => {
           try {
             session.end();
-            this.sessionRepo.updateStatus(id, "ended");
-            this.sessionRepo.updateProcessAlive(id, false);
             console.log(`[SessionManager] Session ${id} ended`);
           } catch (error) {
             console.error(`[SessionManager] Error ending session ${id}:`, error);

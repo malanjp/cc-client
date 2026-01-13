@@ -17,13 +17,20 @@ export interface ClaudeMessage {
   };
 }
 
-export interface SessionInfo {
+export interface ClaudeProject {
   id: string;
-  workDir: string;
-  createdAt: number;
-  updatedAt: number;
-  status: "active" | "ended";
-  processAlive: boolean;
+  path: string;
+  name: string;
+  lastAccessed: number;
+  sessionCount: number;
+}
+
+export interface ClaudeSessionSummary {
+  id: string;
+  projectId: string;
+  firstMessage: string;
+  timestamp: string;
+  messageCount: number;
 }
 
 export interface SessionState {
@@ -42,8 +49,12 @@ export interface SessionState {
   workDir: string;
   messages: ClaudeMessage[];
   isResponding: boolean;
-  availableSessions: SessionInfo[];
-  isViewingHistory: boolean; // 履歴閲覧モード（プロセス停止済み）
+
+  // Claude CLI history state
+  claudeProjects: ClaudeProject[];
+  claudeSessions: ClaudeSessionSummary[];
+  selectedClaudeProjectId: string | null;
+  isViewingClaudeHistory: boolean; // Claude CLI 履歴閲覧モード
 
   // Actions
   setServerUrl: (url: string) => void;
@@ -58,8 +69,10 @@ export interface SessionState {
   addMessage: (message: ClaudeMessage) => void;
   loadMessages: (messages: ClaudeMessage[]) => void;
   clearMessages: () => void;
-  setAvailableSessions: (sessions: SessionInfo[]) => void;
-  setViewingHistory: (viewing: boolean) => void;
+  setClaudeProjects: (projects: ClaudeProject[]) => void;
+  setClaudeSessions: (sessions: ClaudeSessionSummary[]) => void;
+  setSelectedClaudeProjectId: (id: string | null) => void;
+  setViewingClaudeHistory: (viewing: boolean) => void;
   reset: () => void;
 }
 
@@ -74,8 +87,10 @@ const initialState = {
   workDir: "",
   messages: [] as ClaudeMessage[],
   isResponding: false,
-  availableSessions: [] as SessionInfo[],
-  isViewingHistory: false,
+  claudeProjects: [] as ClaudeProject[],
+  claudeSessions: [] as ClaudeSessionSummary[],
+  selectedClaudeProjectId: null,
+  isViewingClaudeHistory: false,
 };
 
 export const useSessionStore = create<SessionState>((set) => ({
@@ -101,9 +116,13 @@ export const useSessionStore = create<SessionState>((set) => ({
 
   clearMessages: () => set({ messages: [] }),
 
-  setAvailableSessions: (sessions) => set({ availableSessions: sessions }),
+  setClaudeProjects: (projects) => set({ claudeProjects: projects }),
 
-  setViewingHistory: (viewing) => set({ isViewingHistory: viewing }),
+  setClaudeSessions: (sessions) => set({ claudeSessions: sessions }),
+
+  setSelectedClaudeProjectId: (id) => set({ selectedClaudeProjectId: id }),
+
+  setViewingClaudeHistory: (viewing) => set({ isViewingClaudeHistory: viewing }),
 
   reset: () => set(initialState),
 }));

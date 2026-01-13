@@ -1,7 +1,7 @@
 import { useState, useCallback, type FormEvent } from "react";
-import { Wifi, WifiOff, Loader2, History, Play, Eye, RefreshCw, X } from "lucide-react";
+import { Wifi, WifiOff, Loader2, RefreshCw, X } from "lucide-react";
 import { cn } from "../lib/utils";
-import { useSessionStore, saveServerUrl, type SessionInfo } from "../store/sessionStore";
+import { useSessionStore, saveServerUrl } from "../store/sessionStore";
 import { useWebSocket } from "../hooks/useWebSocket";
 
 const MAX_RECONNECT_ATTEMPTS = 5;
@@ -13,7 +13,6 @@ export function ConnectionPanel() {
     isConnecting,
     connectionError,
     sessionId,
-    availableSessions,
     isReconnecting,
     reconnectAttempts,
   } = useSessionStore();
@@ -22,13 +21,9 @@ export function ConnectionPanel() {
     disconnect,
     cancelReconnect,
     endSession,
-    fetchSessions,
-    restoreSession,
-    attachSession,
   } = useWebSocket();
 
   const [inputUrl, setInputUrl] = useState(serverUrl || "http://localhost:8080");
-  const [showSessions, setShowSessions] = useState(false);
 
   const handleConnect = useCallback(
     (e: FormEvent) => {
@@ -49,37 +44,6 @@ export function ConnectionPanel() {
     disconnect();
   }, [sessionId, endSession, disconnect]);
 
-  // セッション一覧を取得
-  const handleShowSessions = useCallback(async () => {
-    if (showSessions) {
-      setShowSessions(false);
-    } else {
-      await fetchSessions();
-      setShowSessions(true);
-    }
-  }, [showSessions, fetchSessions]);
-
-  const handleSelectSession = useCallback(
-    (session: (typeof availableSessions)[0]) => {
-      if (session.processAlive) {
-        attachSession(session.id);
-      } else {
-        restoreSession(session.id);
-      }
-      setShowSessions(false);
-    },
-    [attachSession, restoreSession]
-  );
-
-  const formatDate = (timestamp: number) => {
-    return new Date(timestamp).toLocaleString("ja-JP", {
-      month: "short",
-      day: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-    });
-  };
-
   if (isConnected && sessionId) {
     return (
       <div className="bg-slate-800 border-b border-slate-700">
@@ -91,13 +55,6 @@ export function ConnectionPanel() {
           </div>
           <div className="flex items-center gap-2">
             <button
-              onClick={handleShowSessions}
-              className="text-xs text-slate-400 hover:text-slate-300 flex items-center gap-1"
-            >
-              <History className="w-3 h-3" />
-              履歴
-            </button>
-            <button
               onClick={handleDisconnect}
               className="text-xs text-red-400 hover:text-red-300"
             >
@@ -105,13 +62,6 @@ export function ConnectionPanel() {
             </button>
           </div>
         </div>
-        {showSessions && (
-          <SessionList
-            sessions={availableSessions}
-            onSelect={handleSelectSession}
-            formatDate={formatDate}
-          />
-        )}
       </div>
     );
   }
@@ -217,61 +167,6 @@ export function ConnectionPanel() {
           </button>
         </form>
       </div>
-    </div>
-  );
-}
-
-// セッション一覧コンポーネント
-interface SessionListProps {
-  sessions: SessionInfo[];
-  onSelect: (session: SessionInfo) => void;
-  formatDate: (timestamp: number) => string;
-}
-
-function SessionList({ sessions, onSelect, formatDate }: SessionListProps) {
-  if (sessions.length === 0) {
-    return (
-      <div className="px-4 py-3 border-t border-slate-700">
-        <p className="text-xs text-slate-500 text-center">履歴がありません</p>
-      </div>
-    );
-  }
-
-  return (
-    <div className="border-t border-slate-700 max-h-48 overflow-y-auto">
-      {sessions.map((session) => (
-        <button
-          key={session.id}
-          onClick={() => onSelect(session)}
-          className={cn(
-            "w-full px-4 py-2 flex items-center gap-3",
-            "hover:bg-slate-700/50 transition-colors",
-            "text-left border-b border-slate-700/50 last:border-b-0"
-          )}
-        >
-          {session.processAlive ? (
-            <Play className="w-3 h-3 text-green-500 flex-shrink-0" />
-          ) : (
-            <Eye className="w-3 h-3 text-slate-500 flex-shrink-0" />
-          )}
-          <div className="flex-1 min-w-0">
-            <p className="text-xs text-slate-300 truncate">
-              {session.workDir.split("/").pop() || session.workDir}
-            </p>
-            <p className="text-xs text-slate-500">{formatDate(session.createdAt)}</p>
-          </div>
-          <span
-            className={cn(
-              "text-xs px-1.5 py-0.5 rounded",
-              session.processAlive
-                ? "bg-green-900/50 text-green-400"
-                : "bg-slate-700 text-slate-400"
-            )}
-          >
-            {session.processAlive ? "実行中" : "履歴"}
-          </span>
-        </button>
-      ))}
     </div>
   );
 }

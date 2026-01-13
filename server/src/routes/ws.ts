@@ -1,27 +1,5 @@
 import type { ServerWebSocket } from "bun";
 import { sessionManager, isValidWorkDir, type ClaudeSession } from "../services/session";
-import { dbManager } from "../db/database";
-import { MessageRepository } from "../db/repositories/messageRepository";
-import type { ClaudeMessage } from "../utils/stream";
-
-// メッセージから content を抽出するヘルパー
-function extractContent(msg: ClaudeMessage): string {
-  if ("message" in msg && msg.message) {
-    return typeof msg.message.content === "string"
-      ? msg.message.content
-      : JSON.stringify(msg.message.content);
-  }
-  if ("tool_use" in msg && msg.tool_use) {
-    return `Tool: ${msg.tool_use.name}`;
-  }
-  if ("permission_request" in msg && msg.permission_request) {
-    return msg.permission_request.description || `Permission for ${msg.permission_request.tool}`;
-  }
-  if ("result" in msg && msg.result) {
-    return JSON.stringify(msg.result);
-  }
-  return "";
-}
 
 interface WebSocketData {
   sessionId: string | null;
@@ -71,24 +49,8 @@ export function createWebSocketHandler() {
             ws.data.sessionId = session.id;
 
             // Subscribe to session events
-            const messageRepo = new MessageRepository(dbManager.getDb());
-
             session.onMessage((msg) => {
               try {
-                // DB にメッセージを保存
-                messageRepo.create({
-                  id: crypto.randomUUID(),
-                  session_id: session.id,
-                  type: msg.type,
-                  content: extractContent(msg),
-                  timestamp: Date.now(),
-                  tool_name: "tool_use" in msg && msg.tool_use ? msg.tool_use.name : null,
-                  tool_input: "tool_use" in msg && msg.tool_use ? JSON.stringify(msg.tool_use.input) : null,
-                  permission_request: "permission_request" in msg && msg.permission_request
-                    ? JSON.stringify(msg.permission_request)
-                    : null,
-                });
-
                 // Spread msg first, then override type for WebSocket message type
                 // and preserve original Claude message type as message_type
                 const wsMessage = {
@@ -127,20 +89,8 @@ export function createWebSocketHandler() {
             const session = requireSession(ws);
             if (!session) return;
 
-            // ユーザーメッセージを DB に保存
-            const messageRepo = new MessageRepository(dbManager.getDb());
-            messageRepo.create({
-              id: crypto.randomUUID(),
-              session_id: session.id,
-              type: "user",
-              content: data.message,
-              timestamp: Date.now(),
-              tool_name: null,
-              tool_input: null,
-              permission_request: null,
-            });
-
-            await session.sendMessage(data.message);
+            const userMessage = data.message as string;
+            await session.sendMessage(userMessage);
             break;
           }
 
@@ -173,32 +123,6 @@ export function createWebSocketHandler() {
             break;
           }
 
-          case "restore_session": {
-            // 過去のセッション履歴を取得（プロセスが終了している場合）
-            const sessionId = data.sessionId as string;
-            if (!sessionId) {
-              sendError(ws, "sessionId is required");
-              return;
-            }
-
-            const sessionInfo = sessionManager.getSessionInfo(sessionId);
-            if (!sessionInfo) {
-              sendError(ws, "Session not found");
-              return;
-            }
-
-            const messageRepo = new MessageRepository(dbManager.getDb());
-            const messages = messageRepo.findBySessionId(sessionId);
-
-            ws.send(JSON.stringify({
-              type: "session_history",
-              sessionId,
-              messages,
-              processAlive: sessionInfo.processAlive,
-            }));
-            break;
-          }
-
           case "attach_session": {
             // 既存のアクティブなセッションに再接続
             const sessionId = data.sessionId as string;
@@ -222,24 +146,8 @@ export function createWebSocketHandler() {
             ws.data.sessionId = sessionId;
 
             // イベントハンドラを再登録
-            const messageRepo = new MessageRepository(dbManager.getDb());
-
             session.onMessage((msg) => {
               try {
-                // DB にメッセージを保存
-                messageRepo.create({
-                  id: crypto.randomUUID(),
-                  session_id: session.id,
-                  type: msg.type,
-                  content: extractContent(msg),
-                  timestamp: Date.now(),
-                  tool_name: "tool_use" in msg && msg.tool_use ? msg.tool_use.name : null,
-                  tool_input: "tool_use" in msg && msg.tool_use ? JSON.stringify(msg.tool_use.input) : null,
-                  permission_request: "permission_request" in msg && msg.permission_request
-                    ? JSON.stringify(msg.permission_request)
-                    : null,
-                });
-
                 const wsMessage = {
                   ...msg,
                   type: "claude_message",
@@ -264,19 +172,73 @@ export function createWebSocketHandler() {
               ws.data.sessionId = null;
             });
 
-            // 履歴を送信
-            const messages = messageRepo.findBySessionId(sessionId);
-            ws.send(JSON.stringify({
-              type: "session_history",
-              sessionId,
-              messages,
-              processAlive: true,
-            }));
-
             ws.send(JSON.stringify({
               type: "session_attached",
               sessionId,
             }));
+            break;
+          }
+
+          case "resume_claude_session": {
+            // Claude CLI の既存セッションを --resume で再開
+            const claudeSessionId = data.sessionId as string;
+            const workDir = data.workDir as string;
+
+            if (!claudeSessionId) {
+              sendError(ws, "sessionId is required");
+              return;
+            }
+            if (!workDir) {
+              sendError(ws, "workDir is required");
+              return;
+            }
+
+            const validation = isValidWorkDir(workDir);
+            if (!validation.valid) {
+              sendError(ws, validation.error || "Invalid work directory");
+              return;
+            }
+
+            try {
+              const session = await sessionManager.resumeSession(claudeSessionId, workDir);
+              ws.data.sessionId = session.id;
+
+              // イベントハンドラを登録
+              session.onMessage((msg) => {
+                try {
+                  const wsMessage = {
+                    ...msg,
+                    type: "claude_message",
+                    message_type: msg.type,
+                  };
+                  ws.send(JSON.stringify(wsMessage));
+                } catch (err) {
+                  console.error("[WS] Failed to send message:", err);
+                }
+              });
+
+              session.onError((error) => {
+                sendError(ws, error.message);
+              });
+
+              session.onEnd(() => {
+                try {
+                  ws.send(JSON.stringify({ type: "session_ended" }));
+                } catch {
+                  // Client may have disconnected
+                }
+                ws.data.sessionId = null;
+              });
+
+              ws.send(JSON.stringify({
+                type: "session_resumed",
+                sessionId: session.id,
+                claudeSessionId,
+                workDir,
+              }));
+            } catch (error) {
+              sendError(ws, error instanceof Error ? error.message : "Failed to resume session");
+            }
             break;
           }
 

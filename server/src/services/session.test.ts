@@ -88,7 +88,6 @@ describe("ClaudeSession", () => {
       expect(info.id).toBe(session.id);
       expect(info.workDir).toBe("/tmp");
       expect(info.status).toBe("active");
-      expect(info.processAlive).toBe(true);
     });
   });
 
@@ -118,10 +117,10 @@ describe("ClaudeSession", () => {
       expect(session.status).toBe("ended");
     });
 
-    it("should update processAlive to false in getInfo", () => {
+    it("should return ended status in getInfo", () => {
       session.end();
       const info = session.getInfo();
-      expect(info.processAlive).toBe(false);
+      expect(info.status).toBe("ended");
     });
   });
 });
