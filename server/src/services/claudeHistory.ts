@@ -64,6 +64,39 @@ export function pathToProjectId(path: string): string {
 }
 
 /**
+ * プロジェクトディレクトリ内のセッションファイルからcwdを取得
+ * projectIdToPathはパス内のハイフンを正しく処理できないため、
+ * セッションファイルに保存されている正確なcwdを使用する
+ */
+function getProjectCwdFromSession(projectDir: string): string | null {
+  try {
+    const files = readdirSync(projectDir).filter(
+      (f) => f.endsWith(".jsonl") && !f.startsWith(".")
+    );
+
+    for (const file of files) {
+      const filePath = join(projectDir, file);
+      const content = readFileSync(filePath, "utf-8");
+      const lines = content.split("\n").filter((l) => l.trim());
+
+      for (const line of lines) {
+        try {
+          const entry = JSON.parse(line);
+          if (entry.cwd && typeof entry.cwd === "string") {
+            return entry.cwd;
+          }
+        } catch {
+          // JSON パースエラーは無視
+        }
+      }
+    }
+  } catch {
+    // ファイル読み込みエラー
+  }
+  return null;
+}
+
+/**
  * Claude CLI のプロジェクト一覧を取得
  */
 export function getClaudeProjects(): ClaudeProject[] {
@@ -79,7 +112,8 @@ export function getClaudeProjects(): ClaudeProject[] {
       if (!entry.isDirectory()) continue;
 
       const projectPath = join(PROJECTS_DIR, entry.name);
-      const actualPath = projectIdToPath(entry.name);
+      // セッションファイルからcwdを取得、フォールバックとしてprojectIdToPathを使用
+      const actualPath = getProjectCwdFromSession(projectPath) || projectIdToPath(entry.name);
 
       // .jsonl ファイル（セッションファイル）をカウント
       const sessionFiles = readdirSync(projectPath).filter(
@@ -341,12 +375,25 @@ export function getSessionMessages(
           } else if (Array.isArray(content)) {
             // ContentBlock 配列の場合、テキストを結合
             msgContent = content
-              .map((block: { type: string; text?: string }) => {
-                if (block.type === "text" && block.text) {
-                  return block.text;
+              .map(
+                (block: {
+                  type: string;
+                  text?: string;
+                  thinking?: string;
+                  name?: string;
+                }) => {
+                  if (block.type === "text" && block.text) {
+                    return block.text;
+                  }
+                  if (block.type === "thinking" && block.thinking) {
+                    return block.thinking;
+                  }
+                  if (block.type === "tool_use" && block.name) {
+                    return `Tool: ${block.name}`;
+                  }
+                  return "";
                 }
-                return "";
-              })
+              )
               .filter(Boolean)
               .join("\n");
           }
