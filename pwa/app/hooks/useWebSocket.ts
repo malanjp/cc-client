@@ -5,6 +5,7 @@ import {
   type ClaudeProject,
   type ClaudeSessionSummary,
 } from "../store/sessionStore";
+import { BUILTIN_SLASH_COMMANDS } from "~/data/slashCommands";
 
 // Singleton WebSocket instance to prevent multiple connections
 let globalWs: WebSocket | null = null;
@@ -30,6 +31,7 @@ export function useWebSocket() {
     isReconnecting,
     reconnectAttempts,
     isViewingClaudeHistory,
+    sessionId,
     setConnected,
     setConnecting,
     setConnectionError,
@@ -39,6 +41,7 @@ export function useWebSocket() {
     setResponding,
     addMessage,
     loadMessages,
+    clearMessages,
     setClaudeProjects,
     setClaudeSessions,
     setViewingClaudeHistory,
@@ -86,13 +89,23 @@ export function useWebSocket() {
             for (const msg of toolResults) {
               addMessage(msg);
             }
+            // ユーザーメッセージ本体も追加（contentがある場合）
+            const userContent = extractContent(data);
+            if (userContent) {
+              addMessage({
+                id: crypto.randomUUID(),
+                type: "user",
+                content: userContent,
+                timestamp: Date.now(),
+              });
+            }
             break;
           }
 
           const content = extractContent(data);
 
           // 表示対象のメッセージタイプ
-          const displayableTypes = ["assistant", "tool_use", "thinking", "system"];
+          const displayableTypes = ["assistant", "user", "tool_use", "thinking", "system"];
 
           // 空コンテンツまたは表示対象外のタイプはスキップ
           if (!content || !displayableTypes.includes(messageType)) {
@@ -338,20 +351,86 @@ export function useWebSocket() {
     [send]
   );
 
-  const sendMessage = useCallback(
-    (message: string) => {
-      const sent = send({ type: "send_message", message });
-      if (sent) {
-        setResponding(true);
-        addMessage({
-          id: crypto.randomUUID(),
-          type: "user",
-          content: message,
-          timestamp: Date.now(),
-        });
+  // ローカルコマンドハンドラ
+  const handleLocalCommand = useCallback(
+    (command: string) => {
+      switch (command) {
+        case "/clear":
+          clearMessages();
+          addMessage({
+            id: crypto.randomUUID(),
+            type: "system",
+            content: "メッセージ履歴をクリアしました",
+            timestamp: Date.now(),
+          });
+          break;
+
+        case "/help": {
+          const helpText = BUILTIN_SLASH_COMMANDS
+            .map(c => `${c.name} - ${c.description}`)
+            .join("\n");
+          addMessage({
+            id: crypto.randomUUID(),
+            type: "system",
+            content: `利用可能なコマンド:\n${helpText}`,
+            timestamp: Date.now(),
+          });
+          break;
+        }
+
+        case "/status":
+          addMessage({
+            id: crypto.randomUUID(),
+            type: "system",
+            content: `接続状態: ${isConnected ? "接続中 ✓" : "未接続"}\nセッションID: ${sessionId || "なし"}`,
+            timestamp: Date.now(),
+          });
+          break;
       }
     },
-    [send, addMessage, setResponding]
+    [clearMessages, addMessage, isConnected, sessionId]
+  );
+
+  const sendMessage = useCallback(
+    (message: string) => {
+      // ユーザーメッセージを追加
+      addMessage({
+        id: crypto.randomUUID(),
+        type: "user",
+        content: message,
+        timestamp: Date.now(),
+      });
+
+      // スラッシュコマンドの処理
+      if (message.startsWith("/")) {
+        const commandName = message.split(" ")[0];
+        const command = BUILTIN_SLASH_COMMANDS.find(c => c.name === commandName);
+
+        if (command) {
+          switch (command.handler) {
+            case "local":
+              handleLocalCommand(commandName);
+              return;
+            case "unsupported":
+              addMessage({
+                id: crypto.randomUUID(),
+                type: "system",
+                content: `${commandName} はPWAでは対応していません`,
+                timestamp: Date.now(),
+              });
+              return;
+            // "cli" の場合はそのまま送信
+          }
+        }
+      }
+
+      // CLIに送信
+      const sent = send({ type: "send_message", message });
+      if (sent && !message.startsWith("/")) {
+        setResponding(true);
+      }
+    },
+    [send, addMessage, setResponding, handleLocalCommand]
   );
 
   const approve = useCallback(() => {

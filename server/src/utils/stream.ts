@@ -64,7 +64,92 @@ export type ParseResult =
   | { success: true; data: ClaudeMessage }
   | { success: false; error: string };
 
+/**
+ * content 配列内の tool_use から許可されたフィールドのみを抽出
+ */
+function sanitizeContent(content: unknown): unknown {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return content;
+
+  return content.map((block) => {
+    if (typeof block !== "object" || block === null) return block;
+    const b = block as Record<string, unknown>;
+
+    if (b.type === "tool_use") {
+      return {
+        type: "tool_use",
+        id: b.id,
+        name: b.name,
+        input: b.input,
+      };
+    }
+    if (b.type === "tool_result") {
+      return {
+        type: "tool_result",
+        tool_use_id: b.tool_use_id,
+        content: b.content,
+        is_error: b.is_error,
+      };
+    }
+    return block;
+  });
+}
+
+/**
+ * パース済みオブジェクトから許可されたフィールドのみを抽出
+ * Claude API が拒否する余分なフィールド（caller など）を除去
+ */
+function extractAllowedFields(
+  parsed: Record<string, unknown>
+): ClaudeMessage {
+  const result: Record<string, unknown> = {
+    type: parsed.type,
+  };
+
+  if (parsed.timestamp) result.timestamp = parsed.timestamp;
+  if (parsed.thinking) result.thinking = parsed.thinking;
+  if (parsed.result) result.result = parsed.result;
+
+  if (parsed.message && typeof parsed.message === "object") {
+    const msg = parsed.message as Record<string, unknown>;
+    const sanitizedMsg: Record<string, unknown> = {};
+    if (msg.role) sanitizedMsg.role = msg.role;
+    if (msg.content !== undefined) {
+      sanitizedMsg.content = sanitizeContent(msg.content);
+    }
+    result.message = sanitizedMsg;
+  }
+
+  if (parsed.tool_use && typeof parsed.tool_use === "object") {
+    const toolUse = parsed.tool_use as Record<string, unknown>;
+    result.tool_use = {
+      id: toolUse.id,
+      name: toolUse.name,
+      input: toolUse.input,
+    };
+  }
+
+  if (
+    parsed.permission_request &&
+    typeof parsed.permission_request === "object"
+  ) {
+    const pr = parsed.permission_request as Record<string, unknown>;
+    result.permission_request = {
+      id: pr.id,
+      tool: pr.tool,
+      description: pr.description,
+    };
+  }
+
+  return result as ClaudeMessage;
+}
+
 export function parseStreamJson(line: string): ClaudeMessage | null {
+  // 非JSON行をスキップ（スラッシュコマンドのプレーンテキスト応答など）
+  if (!line.startsWith("{")) {
+    return null;
+  }
+
   try {
     const parsed = JSON.parse(line);
     const result = ClaudeMessageSchema.safeParse(parsed);
@@ -79,7 +164,7 @@ export function parseStreamJson(line: string): ClaudeMessage | null {
 
     // Only return if we have at least a type field
     if (typeof parsed.type === "string") {
-      return { type: parsed.type, ...parsed } as ClaudeMessage;
+      return extractAllowedFields(parsed);
     }
 
     // Reject completely invalid messages

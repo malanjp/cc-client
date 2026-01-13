@@ -1,6 +1,15 @@
-import { useState, useCallback, useEffect, type FormEvent, type KeyboardEvent } from "react";
+import {
+  useState,
+  useCallback,
+  useEffect,
+  type FormEvent,
+  type KeyboardEvent,
+} from "react";
 import { Send, Square } from "lucide-react";
-import { cn } from "../lib/utils";
+import { cn } from "~/lib/utils";
+import { useSlashCommands } from "~/hooks/useSlashCommands";
+import { CommandSuggestionList } from "./CommandSuggestionList";
+import type { SlashCommand } from "~/data/slashCommands";
 
 interface InputAreaProps {
   onSend: (message: string) => void;
@@ -9,20 +18,44 @@ interface InputAreaProps {
   disabled?: boolean;
 }
 
-export function InputArea({ onSend, onAbort, isResponding, disabled }: InputAreaProps) {
+export function InputArea({
+  onSend,
+  onAbort,
+  isResponding,
+  disabled,
+}: InputAreaProps) {
   const [message, setMessage] = useState("");
   const [isComposing, setIsComposing] = useState(false);
 
-  // Esc キーで応答を中断
+  const {
+    showSuggestions,
+    filteredCommands,
+    selectedIndex,
+    selectNext,
+    selectPrev,
+    getSelectedCommand,
+    resetSelection,
+  } = useSlashCommands(message);
+
+  // メッセージが変わったら選択をリセット
+  useEffect(() => {
+    resetSelection();
+  }, [message, resetSelection]);
+
+  // Esc キーで応答を中断（補完モード外）
   useEffect(() => {
     const handleKeyDown = (e: globalThis.KeyboardEvent) => {
-      if (e.key === "Escape" && isResponding) {
+      if (e.key === "Escape" && isResponding && !showSuggestions) {
         onAbort();
       }
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [isResponding, onAbort]);
+  }, [isResponding, onAbort, showSuggestions]);
+
+  const handleCommandSelect = useCallback((command: SlashCommand) => {
+    setMessage(command.name + " ");
+  }, []);
 
   const handleSubmit = useCallback(
     (e: FormEvent) => {
@@ -37,8 +70,38 @@ export function InputArea({ onSend, onAbort, isResponding, disabled }: InputArea
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent<HTMLTextAreaElement>) => {
-      // IME 変換中は Enter で送信しない
-      if (e.key === "Enter" && !e.shiftKey && !isComposing) {
+      // IME 変換中は無視
+      if (isComposing) return;
+
+      // 補完モード時のキー処理
+      if (showSuggestions && filteredCommands.length > 0) {
+        switch (e.key) {
+          case "ArrowDown":
+            e.preventDefault();
+            selectNext();
+            return;
+          case "ArrowUp":
+            e.preventDefault();
+            selectPrev();
+            return;
+          case "Tab":
+          case "Enter": {
+            const selected = getSelectedCommand();
+            if (selected) {
+              e.preventDefault();
+              handleCommandSelect(selected);
+            }
+            return;
+          }
+          case "Escape":
+            e.preventDefault();
+            setMessage("");
+            return;
+        }
+      }
+
+      // 通常モード: Enter で送信
+      if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
         if (message.trim() && !disabled && !isResponding) {
           onSend(message.trim());
@@ -46,7 +109,19 @@ export function InputArea({ onSend, onAbort, isResponding, disabled }: InputArea
         }
       }
     },
-    [message, onSend, disabled, isResponding, isComposing]
+    [
+      message,
+      onSend,
+      disabled,
+      isResponding,
+      isComposing,
+      showSuggestions,
+      filteredCommands.length,
+      selectNext,
+      selectPrev,
+      getSelectedCommand,
+      handleCommandSelect,
+    ]
   );
 
   return (
@@ -54,7 +129,15 @@ export function InputArea({ onSend, onAbort, isResponding, disabled }: InputArea
       onSubmit={handleSubmit}
       className="border-t border-slate-700 bg-slate-900 p-4"
     >
-      <div className="flex items-end gap-2">
+      <div className="relative flex items-end gap-2">
+        {showSuggestions && (
+          <CommandSuggestionList
+            commands={filteredCommands}
+            selectedIndex={selectedIndex}
+            onSelect={handleCommandSelect}
+          />
+        )}
+
         <textarea
           value={message}
           onChange={(e) => setMessage(e.target.value)}
@@ -116,7 +199,9 @@ export function InputArea({ onSend, onAbort, isResponding, disabled }: InputArea
       <p className="text-xs text-slate-500 mt-2 text-center">
         {isResponding
           ? "応答中... Esc または停止ボタンで中断"
-          : "Enter で送信、Shift+Enter で改行"}
+          : showSuggestions
+            ? "↑↓ で選択、Tab/Enter で確定、Esc でキャンセル"
+            : "/ でコマンド、Enter で送信、Shift+Enter で改行"}
       </p>
     </form>
   );
