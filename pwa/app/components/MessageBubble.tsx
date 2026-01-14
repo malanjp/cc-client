@@ -2,7 +2,7 @@ import { useState } from "react";
 import Markdown from "react-markdown";
 import { cn } from "../lib/utils";
 import type { ClaudeMessage } from "../store/sessionStore";
-import { Bot, User, Wrench, AlertCircle, Brain, ShieldQuestion, FileText, ChevronDown, ChevronRight, type LucideIcon } from "lucide-react";
+import { Bot, User, Wrench, AlertCircle, Brain, ShieldQuestion, FileText, ChevronDown, ChevronRight, HelpCircle, type LucideIcon } from "lucide-react";
 
 interface MessageBubbleProps {
   message: ClaudeMessage;
@@ -18,6 +18,7 @@ const iconMap: Record<ClaudeMessage["type"], LucideIcon> = {
   assistant: Bot,
   system: Bot,
   permission_request: ShieldQuestion,
+  tool_use_prompt: HelpCircle,
 };
 
 const styleMap: Record<ClaudeMessage["type"], { bg: string; iconBg: string }> = {
@@ -29,6 +30,7 @@ const styleMap: Record<ClaudeMessage["type"], { bg: string; iconBg: string }> = 
   assistant: { bg: "bg-slate-800/50 mr-8", iconBg: "bg-emerald-600" },
   system: { bg: "bg-slate-800/50 mr-8", iconBg: "bg-emerald-600" },
   permission_request: { bg: "bg-orange-900/30 border border-orange-500/50", iconBg: "bg-orange-600" },
+  tool_use_prompt: { bg: "bg-blue-900/30 border border-blue-500/50", iconBg: "bg-blue-600" },
 };
 
 const labelMap: Record<ClaudeMessage["type"], string> = {
@@ -40,20 +42,26 @@ const labelMap: Record<ClaudeMessage["type"], string> = {
   assistant: "Claude",
   system: "Claude",
   permission_request: "権限リクエスト",
+  tool_use_prompt: "確認",
 };
 
 export function MessageBubble({ message }: MessageBubbleProps) {
   const [isExpanded, setIsExpanded] = useState(false);
   const Icon = iconMap[message.type];
   const styles = styleMap[message.type];
+
+  // tool_use の場合は toolName を使用、それ以外は labelMap を使用
   const label = message.type === "tool_use"
     ? message.toolName || "ツール"
     : labelMap[message.type];
 
-  const renderToolInput = () => {
-    if (!message.toolInput) return null;
+  // tool_use タイプ専用: toolInput を取得
+  const toolInput = message.type === "tool_use" ? message.toolInput : undefined;
 
-    const entries = Object.entries(message.toolInput);
+  const renderToolInput = () => {
+    if (!toolInput) return null;
+
+    const entries = Object.entries(toolInput);
     const previewEntries = entries.slice(0, 2);
     const hasMore = entries.length > 2;
 
@@ -94,7 +102,7 @@ export function MessageBubble({ message }: MessageBubbleProps) {
 
         {isExpanded && (
           <pre className="text-xs bg-slate-900/50 p-2 rounded overflow-x-auto mt-2">
-            <code>{JSON.stringify(message.toolInput, null, 2)}</code>
+            <code>{JSON.stringify(toolInput, null, 2)}</code>
           </pre>
         )}
       </div>

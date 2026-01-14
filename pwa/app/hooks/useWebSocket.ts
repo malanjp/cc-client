@@ -1,11 +1,123 @@
 import { useCallback, useRef } from "react";
 import {
   useSessionStore,
+  saveClaudeSessionId,
+  saveWorkDir,
+  clearSessionStorage,
   type ClaudeMessage,
   type ClaudeProject,
   type ClaudeSessionSummary,
+  type ToolUsePrompt,
+  type UiToolResultMessage,
 } from "../store/sessionStore";
 import { BUILTIN_SLASH_COMMANDS } from "~/data/slashCommands";
+
+// ユーザー確認が必要な tool_use のツール名
+const PROMPT_TOOL_NAMES = ["ExitPlanMode", "AskUserQuestion"];
+
+// 確認メッセージのパターン（CLI からの自動 tool_result を検出）
+const CONFIRMATION_PATTERNS = [
+  /^Exit plan mode\?$/i,
+];
+
+/** 確認が必要な tool_use かどうかを判定 */
+function isPromptToolUse(toolName: string): boolean {
+  return PROMPT_TOOL_NAMES.includes(toolName);
+}
+
+/** CLI からの自動確認 tool_result かどうかを判定 */
+function isAutoConfirmationToolResult(content: string, isError: boolean): boolean {
+  if (!isError) return false;
+  return CONFIRMATION_PATTERNS.some(pattern => pattern.test(content));
+}
+
+interface ToolUseBlock {
+  type: "tool_use";
+  id: string;
+  name: string;
+  input: Record<string, unknown>;
+}
+
+function isToolUseBlock(block: unknown): block is ToolUseBlock {
+  if (typeof block !== "object" || block === null) {
+    return false;
+  }
+  const obj = block as Record<string, unknown>;
+  return (
+    obj.type === "tool_use" &&
+    typeof obj.id === "string" &&
+    typeof obj.name === "string" &&
+    typeof obj.input === "object" &&
+    obj.input !== null
+  );
+}
+
+/**
+ * assistant メッセージから確認が必要な tool_use を抽出して ToolUsePrompt 形式に変換
+ */
+function extractToolUsePrompt(data: Record<string, unknown>): ToolUsePrompt | null {
+  const message = data.message as {
+    content?: unknown[];
+  } | undefined;
+
+  if (!message?.content || !Array.isArray(message.content)) {
+    return null;
+  }
+
+  // tool_use ブロックを探す
+  const toolUseBlock = message.content.find(isToolUseBlock);
+  if (!toolUseBlock || !isPromptToolUse(toolUseBlock.name)) {
+    return null;
+  }
+
+  // ツールごとに適切な質問と選択肢を生成
+  switch (toolUseBlock.name) {
+    case "ExitPlanMode":
+      return {
+        toolUseId: toolUseBlock.id,
+        toolName: toolUseBlock.name,
+        question: "Exit plan mode?",
+        options: [
+          { label: "はい", value: "yes" },
+          { label: "いいえ", value: "no" },
+        ],
+      };
+
+    case "AskUserQuestion": {
+      // AskUserQuestion の input から質問と選択肢を抽出
+      const input = toolUseBlock.input as {
+        questions?: Array<{
+          question: string;
+          options: Array<{ label: string; description?: string }>;
+        }>;
+      };
+      const firstQuestion = input.questions?.[0];
+      if (!firstQuestion) {
+        return {
+          toolUseId: toolUseBlock.id,
+          toolName: toolUseBlock.name,
+          question: "質問に回答してください",
+          options: [
+            { label: "OK", value: "ok" },
+          ],
+        };
+      }
+      return {
+        toolUseId: toolUseBlock.id,
+        toolName: toolUseBlock.name,
+        question: firstQuestion.question,
+        options: firstQuestion.options.map((opt) => ({
+          label: opt.label,
+          value: opt.label, // AskUserQuestion はラベルをそのまま値として使用
+          description: opt.description,
+        })),
+      };
+    }
+
+    default:
+      return null;
+  }
+}
 
 // Singleton WebSocket instance to prevent multiple connections
 let globalWs: WebSocket | null = null;
@@ -22,6 +134,7 @@ let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
 export function useWebSocket() {
   const connectingRef = useRef(false);
+  const handleMessageRef = useRef<(data: Record<string, unknown>) => void>(() => {});
 
   const {
     serverUrl,
@@ -38,6 +151,7 @@ export function useWebSocket() {
     setReconnecting,
     setReconnectAttempts,
     setSessionId,
+    setWorkDir,
     setResponding,
     addMessage,
     loadMessages,
@@ -57,12 +171,29 @@ export function useWebSocket() {
           break;
 
         case "session_created":
+          clearMessages();
           setSessionId(data.sessionId as string);
+          // workDir が存在しない場合は空文字列をセット
+          setWorkDir(typeof data.workDir === "string" ? data.workDir : "");
           setViewingClaudeHistory(false);
           break;
 
         case "claude_message": {
           const messageType = data.message_type as string;
+
+          // system/init メッセージから session_id を取得して保存
+          if (messageType === "system" && data.subtype === "init") {
+            const sessionIdFromInit = data.session_id as string | undefined;
+            if (sessionIdFromInit) {
+              console.log("[WS] Captured Claude session ID:", sessionIdFromInit.slice(0, 8) + "...");
+              saveClaudeSessionId(sessionIdFromInit);
+              // workDir も保存
+              const currentWorkDir = useSessionStore.getState().workDir;
+              if (currentWorkDir) {
+                saveWorkDir(currentWorkDir);
+              }
+            }
+          }
 
           // result タイプのメッセージを受信したら応答完了
           if (messageType === "result") {
@@ -72,13 +203,21 @@ export function useWebSocket() {
           // permission_request タイプの処理（許可待ち時は応答完了扱い）
           if (messageType === "permission_request" && data.permission_request) {
             setResponding(false);
-            const pr = data.permission_request as ClaudeMessage["permissionRequest"];
+            const pr = data.permission_request as {
+              id: string;
+              tool: string;
+              description?: string;
+            };
             addMessage({
               id: crypto.randomUUID(),
               type: "permission_request",
-              content: pr?.description || `${pr?.tool} の実行許可を求めています`,
+              content: pr.description || `${pr.tool} の実行許可を求めています`,
               timestamp: Date.now(),
-              permissionRequest: pr,
+              permissionRequest: {
+                id: pr.id,
+                tool: pr.tool,
+                description: pr.description,
+              },
             });
             break;
           }
@@ -87,6 +226,11 @@ export function useWebSocket() {
           if (messageType === "user") {
             const toolResults = extractToolResults(data);
             for (const msg of toolResults) {
+              // CLI からの自動確認 tool_result はスキップ
+              if (msg.toolResult?.isError && isAutoConfirmationToolResult(msg.content, true)) {
+                console.log("[WS] Skipping auto confirmation tool_result:", msg.content);
+                continue;
+              }
               addMessage(msg);
             }
             // ユーザーメッセージ本体も追加（contentがある場合）
@@ -102,29 +246,71 @@ export function useWebSocket() {
             break;
           }
 
+          // assistant メッセージ内の tool_use を検出
+          if (messageType === "assistant") {
+            const toolUsePrompt = extractToolUsePrompt(data);
+            if (toolUsePrompt) {
+              // テキスト部分があれば先に表示
+              const textContent = extractContent(data);
+              if (textContent) {
+                addMessage({
+                  id: crypto.randomUUID(),
+                  type: "assistant",
+                  content: textContent,
+                  timestamp: Date.now(),
+                });
+              }
+
+              setResponding(false);
+              addMessage({
+                id: crypto.randomUUID(),
+                type: "tool_use_prompt",
+                content: toolUsePrompt.question,
+                timestamp: Date.now(),
+                toolUsePrompt,
+              });
+              // tool_use_prompt を表示したら、通常の tool_use 表示はスキップ
+              break;
+            }
+          }
+
           const content = extractContent(data);
 
-          // 表示対象のメッセージタイプ
-          const displayableTypes = ["assistant", "user", "tool_use", "thinking", "system"];
-
-          // 空コンテンツまたは表示対象外のタイプはスキップ
-          if (!content || !displayableTypes.includes(messageType)) {
+          // 空コンテンツはスキップ
+          if (!content) {
             break;
           }
 
-          const msg: ClaudeMessage = {
-            id: crypto.randomUUID(),
-            type: (messageType as ClaudeMessage["type"]) || "assistant",
-            content,
-            timestamp: Date.now(),
-            toolName: (data.tool_use as { name?: string })?.name,
-            toolInput: (data.tool_use as { input?: Record<string, unknown> })
-              ?.input,
-            permissionRequest: data.permission_request as
-              | ClaudeMessage["permissionRequest"]
-              | undefined,
-          };
-          addMessage(msg);
+          // タイプごとに適切なメッセージオブジェクトを作成
+          const timestamp = Date.now();
+          const id = crypto.randomUUID();
+
+          switch (messageType) {
+            case "assistant":
+              addMessage({ id, type: "assistant", content, timestamp });
+              break;
+            case "thinking":
+              addMessage({ id, type: "thinking", content, timestamp });
+              break;
+            case "system":
+              addMessage({ id, type: "system", content, timestamp });
+              break;
+            case "tool_use": {
+              const toolUse = data.tool_use as { name?: string; input?: Record<string, unknown> } | undefined;
+              addMessage({
+                id,
+                type: "tool_use",
+                content,
+                timestamp,
+                toolName: toolUse?.name ?? "Unknown Tool",
+                toolInput: toolUse?.input ?? {},
+              });
+              break;
+            }
+            // user メッセージは既に上で処理済み、その他は無視
+            default:
+              break;
+          }
           break;
         }
 
@@ -140,6 +326,7 @@ export function useWebSocket() {
 
         case "session_ended":
           setSessionId(null);
+          clearSessionStorage();
           break;
 
         case "session_attached":
@@ -147,20 +334,48 @@ export function useWebSocket() {
           setViewingClaudeHistory(false);
           break;
 
-        case "session_resumed":
+        case "session_resumed": {
           setSessionId(data.sessionId as string);
           setViewingClaudeHistory(false);
+          const resumedClaudeSessionId = data.claudeSessionId as string;
+          const resumedWorkDir = data.workDir as string;
+          if (resumedClaudeSessionId) {
+            saveClaudeSessionId(resumedClaudeSessionId);
+          }
+          if (resumedWorkDir) {
+            saveWorkDir(resumedWorkDir);
+          }
           addMessage({
             id: crypto.randomUUID(),
             type: "system",
-            content: `セッション ${(data.claudeSessionId as string).slice(0, 8)}... を再開しました`,
+            content: `セッション ${resumedClaudeSessionId.slice(0, 8)}... を再開しました`,
             timestamp: Date.now(),
           });
           break;
+        }
+
+        case "session_resumed_after_abort": {
+          setSessionId(data.sessionId as string);
+          setResponding(false);
+          const abortClaudeSessionId = data.claudeSessionId as string | undefined;
+          if (abortClaudeSessionId) {
+            saveClaudeSessionId(abortClaudeSessionId);
+          }
+          addMessage({
+            id: crypto.randomUUID(),
+            type: "system",
+            content: "処理を中断しました",
+            timestamp: Date.now(),
+          });
+          break;
+        }
       }
     },
-    [setSessionId, setResponding, addMessage, setViewingClaudeHistory]
+    [setSessionId, setWorkDir, setResponding, addMessage, clearMessages, setViewingClaudeHistory]
   );
+
+  // handleMessage を ref に保存して、connect の依存配列から除外
+  handleMessageRef.current = handleMessage;
 
   const connect = useCallback((urlOverride?: string, isReconnect = false) => {
     const url = urlOverride || serverUrl;
@@ -214,14 +429,24 @@ export function useWebSocket() {
           });
         }
 
-        // 接続成功時に自動でセッションを作成
-        ws.send(JSON.stringify({ type: "create_session" }));
+        // 保存された Claude セッションがあれば復元、なければ新規作成
+        const { claudeSessionId, workDir } = useSessionStore.getState();
+        if (claudeSessionId && workDir) {
+          console.log("[WS] Resuming Claude session:", claudeSessionId.slice(0, 8) + "...");
+          ws.send(JSON.stringify({
+            type: "resume_claude_session",
+            sessionId: claudeSessionId,
+            workDir,
+          }));
+        } else {
+          ws.send(JSON.stringify({ type: "create_session" }));
+        }
       };
 
       ws.onmessage = (event) => {
         try {
           const data = JSON.parse(event.data);
-          handleMessage(data);
+          handleMessageRef.current(data);
         } catch (error) {
           const message = error instanceof Error ? error.message : "パースエラー";
           console.error("[WS] Parse error:", message);
@@ -294,7 +519,7 @@ export function useWebSocket() {
         error instanceof Error ? error.message : "接続に失敗しました"
       );
     }
-  }, [serverUrl, setConnected, setConnecting, setConnectionError, setReconnecting, setReconnectAttempts, handleMessage, addMessage]);
+  }, [serverUrl, setConnected, setConnecting, setConnectionError, setReconnecting, setReconnectAttempts, addMessage]);
 
   const cancelReconnect = useCallback(() => {
     if (reconnectTimer) {
@@ -441,6 +666,13 @@ export function useWebSocket() {
     send({ type: "reject" });
   }, [send]);
 
+  const respondToToolUse = useCallback(
+    (toolUseId: string, content: string) => {
+      send({ type: "respond_to_tool_use", toolUseId, content });
+    },
+    [send]
+  );
+
   const abort = useCallback(() => {
     send({ type: "abort" });
     setResponding(false);
@@ -508,24 +740,46 @@ export function useWebSocket() {
         if (!res.ok) throw new Error("Failed to fetch Claude session messages");
         const data = await res.json();
 
-        // メッセージを ClaudeMessage 形式に変換
-        const messages: ClaudeMessage[] = (
-          data.messages as Array<{
-            uuid: string;
-            type: string;
-            content: string;
-            timestamp: string;
-            toolName?: string;
-            toolInput?: Record<string, unknown>;
-          }>
-        ).map((m) => ({
-          id: m.uuid,
-          type: m.type as ClaudeMessage["type"],
-          content: m.content,
-          timestamp: new Date(m.timestamp).getTime(),
-          toolName: m.toolName,
-          toolInput: m.toolInput,
-        }));
+        // メッセージを ClaudeMessage 形式に変換（タイプごとに適切な構造で）
+        const rawMessages = data.messages as Array<{
+          uuid: string;
+          type: string;
+          content: string;
+          timestamp: string;
+          toolName?: string;
+          toolInput?: Record<string, unknown>;
+        }>;
+
+        const messages: ClaudeMessage[] = rawMessages.map((m): ClaudeMessage => {
+          const base = {
+            id: m.uuid,
+            content: m.content,
+            timestamp: new Date(m.timestamp).getTime(),
+          };
+
+          switch (m.type) {
+            case "tool_use":
+              return {
+                ...base,
+                type: "tool_use",
+                toolName: m.toolName ?? "Unknown Tool",
+                toolInput: m.toolInput ?? {},
+              };
+            case "assistant":
+              return { ...base, type: "assistant" };
+            case "user":
+              return { ...base, type: "user" };
+            case "system":
+              return { ...base, type: "system" };
+            case "thinking":
+              return { ...base, type: "thinking" };
+            case "error":
+              return { ...base, type: "error" };
+            default:
+              // 不明なタイプは system として扱う
+              return { ...base, type: "system" };
+          }
+        });
 
         loadMessages(messages);
         setViewingClaudeHistory(true);
@@ -561,6 +815,7 @@ export function useWebSocket() {
     sendMessage,
     approve,
     reject,
+    respondToToolUse,
     abort,
     endSession,
     attachSession,
@@ -615,9 +870,9 @@ function isToolResultBlock(block: unknown): block is ToolResultBlock {
 }
 
 /**
- * userメッセージからtool_resultブロックを抽出してClaudeMessage形式に変換
+ * userメッセージからtool_resultブロックを抽出してUiToolResultMessage形式に変換
  */
-function extractToolResults(data: Record<string, unknown>): import("../store/sessionStore").ClaudeMessage[] {
+function extractToolResults(data: Record<string, unknown>): UiToolResultMessage[] {
   const message = data.message as {
     content?: unknown[];
   } | undefined;
@@ -626,18 +881,16 @@ function extractToolResults(data: Record<string, unknown>): import("../store/ses
     return [];
   }
 
-  return message.content
-    .filter(isToolResultBlock)
-    .map((block) => ({
-      id: crypto.randomUUID(),
-      type: "tool_result" as const,
-      content: typeof block.content === "string" ? block.content : JSON.stringify(block.content ?? ""),
-      timestamp: Date.now(),
-      toolResult: {
-        toolUseId: block.tool_use_id,
-        isError: block.is_error,
-      },
-    }));
+  return message.content.filter(isToolResultBlock).map((block): UiToolResultMessage => ({
+    id: crypto.randomUUID(),
+    type: "tool_result",
+    content: typeof block.content === "string" ? block.content : JSON.stringify(block.content ?? ""),
+    timestamp: Date.now(),
+    toolResult: {
+      toolUseId: block.tool_use_id,
+      isError: block.is_error,
+    },
+  }));
 }
 
 function isToolUse(value: unknown): value is { name: string } {

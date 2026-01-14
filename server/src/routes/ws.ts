@@ -1,8 +1,64 @@
 import type { ServerWebSocket } from "bun";
 import { sessionManager, isValidWorkDir, type ClaudeSession } from "../services/session";
+import type { ClaudeMessage } from "../utils/stream";
 
 interface WebSocketData {
   sessionId: string | null;
+}
+
+/** tool_use ブロックから caller など余分なフィールドを除外 */
+function sanitizeToolUseBlock(block: unknown): unknown {
+  if (typeof block === "object" && block !== null && (block as { type?: string }).type === "tool_use") {
+    const { id, name, input } = block as { id: string; name: string; input: Record<string, unknown> };
+    return { type: "tool_use" as const, id, name, input };
+  }
+  return block;
+}
+
+/** tool_use メッセージから caller など余分なフィールドを除外 */
+function sanitizeCliMessage(msg: ClaudeMessage): ClaudeMessage {
+  // トップレベルの tool_use メッセージ
+  if (msg.type === "tool_use" && msg.tool_use) {
+    const { id, name, input } = msg.tool_use;
+    return {
+      ...msg,
+      tool_use: { id, name, input }
+    };
+  }
+
+  // assistant メッセージ内の content 配列内の tool_use ブロック
+  if (msg.type === "assistant" && Array.isArray(msg.message.content)) {
+    return {
+      ...msg,
+      message: {
+        ...msg.message,
+        content: msg.message.content.map(sanitizeToolUseBlock),
+      },
+    } as ClaudeMessage;
+  }
+
+  // user メッセージ内の content 配列内の tool_use ブロック
+  if (msg.type === "user" && Array.isArray(msg.message.content)) {
+    return {
+      ...msg,
+      message: {
+        ...msg.message,
+        content: msg.message.content.map(sanitizeToolUseBlock),
+      },
+    } as ClaudeMessage;
+  }
+
+  return msg;
+}
+
+/** WebSocket送信用のメッセージを作成 */
+function createWsMessage(msg: ClaudeMessage) {
+  const sanitized = sanitizeCliMessage(msg);
+  return {
+    ...sanitized,
+    type: "claude_message" as const,
+    message_type: msg.type,
+  };
 }
 
 function sendError(ws: ServerWebSocket<WebSocketData>, error: string): void {
@@ -36,6 +92,12 @@ export function createWebSocketHandler() {
 
         switch (data.type) {
           case "create_session": {
+            // 既存セッションがあれば終了
+            if (ws.data.sessionId) {
+              sessionManager.endSession(ws.data.sessionId);
+              ws.data.sessionId = null;
+            }
+
             const workDir = data.workDir || process.cwd();
 
             // Validate workDir before creating session
@@ -51,14 +113,7 @@ export function createWebSocketHandler() {
             // Subscribe to session events
             session.onMessage((msg) => {
               try {
-                // Spread msg first, then override type for WebSocket message type
-                // and preserve original Claude message type as message_type
-                const wsMessage = {
-                  ...msg,
-                  type: "claude_message",
-                  message_type: msg.type,
-                };
-                ws.send(JSON.stringify(wsMessage));
+                ws.send(JSON.stringify(createWsMessage(msg)));
               } catch (err) {
                 console.error("[WS] Failed to send message:", err);
               }
@@ -69,6 +124,9 @@ export function createWebSocketHandler() {
             });
 
             session.onEnd(() => {
+              // abort 時は session_ended を送信しない（abort ハンドラで処理する）
+              if (session.isAborting) return;
+
               try {
                 ws.send(JSON.stringify({ type: "session_ended" }));
               } catch {
@@ -108,10 +166,87 @@ export function createWebSocketHandler() {
             break;
           }
 
+          case "respond_to_tool_use": {
+            const session = requireSession(ws);
+            if (!session) return;
+
+            // toolUseId の検証
+            if (typeof data.toolUseId !== "string" || !data.toolUseId.trim()) {
+              sendError(ws, "toolUseId is required and must be a non-empty string");
+              return;
+            }
+            const toolUseId = data.toolUseId;
+
+            // content の検証（省略可能だが、存在する場合は文字列であること）
+            const content =
+              data.content == null
+                ? ""
+                : typeof data.content === "string"
+                  ? data.content
+                  : String(data.content);
+
+            await session.respondToToolUse(toolUseId, content);
+            break;
+          }
+
           case "abort": {
             const session = requireSession(ws);
             if (!session) return;
-            session.abort();
+
+            // Claude CLI のセッションIDと作業ディレクトリを取得
+            const claudeSessionId = session.getClaudeSessionId();
+            const workDir = session.workDir;
+
+            // 現在のプロセスを終了
+            await session.abort();
+
+            // セッションIDがあれば自動再開
+            if (claudeSessionId) {
+              try {
+                const newSession = await sessionManager.resumeSession(claudeSessionId, workDir);
+                ws.data.sessionId = newSession.id;
+
+                // イベントハンドラを再登録
+                newSession.onMessage((msg) => {
+                  try {
+                    ws.send(JSON.stringify(createWsMessage(msg)));
+                  } catch (err) {
+                    console.error("[WS] Failed to send message:", err);
+                  }
+                });
+
+                newSession.onError((error) => {
+                  sendError(ws, error.message);
+                });
+
+                newSession.onEnd(() => {
+                  // abort 時は session_ended を送信しない（abort ハンドラで処理する）
+                  if (newSession.isAborting) return;
+
+                  try {
+                    ws.send(JSON.stringify({ type: "session_ended" }));
+                  } catch {
+                    // Client may have disconnected
+                  }
+                  ws.data.sessionId = null;
+                });
+
+                ws.send(JSON.stringify({
+                  type: "session_resumed_after_abort",
+                  sessionId: newSession.id,
+                  claudeSessionId,
+                }));
+              } catch (error) {
+                console.error("[WS] Failed to resume session after abort:", error);
+                // 失敗時は sessionId をクリア
+                ws.data.sessionId = null;
+                sendError(ws, "Failed to resume session after abort");
+              }
+            } else {
+              // セッションIDがない場合は単純に終了通知
+              ws.send(JSON.stringify({ type: "session_ended" }));
+              ws.data.sessionId = null;
+            }
             break;
           }
 
@@ -145,15 +280,11 @@ export function createWebSocketHandler() {
             // WebSocket 接続をセッションに紐付け
             ws.data.sessionId = sessionId;
 
-            // イベントハンドラを再登録
+            // 既存のハンドラをクリアしてから再登録（重複防止）
+            session.clearAllHandlers();
             session.onMessage((msg) => {
               try {
-                const wsMessage = {
-                  ...msg,
-                  type: "claude_message",
-                  message_type: msg.type,
-                };
-                ws.send(JSON.stringify(wsMessage));
+                ws.send(JSON.stringify(createWsMessage(msg)));
               } catch (err) {
                 console.error("[WS] Failed to send message:", err);
               }
@@ -164,6 +295,9 @@ export function createWebSocketHandler() {
             });
 
             session.onEnd(() => {
+              // abort 時は session_ended を送信しない（abort ハンドラで処理する）
+              if (session.isAborting) return;
+
               try {
                 ws.send(JSON.stringify({ type: "session_ended" }));
               } catch {
@@ -180,6 +314,12 @@ export function createWebSocketHandler() {
           }
 
           case "resume_claude_session": {
+            // 既存セッションがあれば終了
+            if (ws.data.sessionId) {
+              sessionManager.endSession(ws.data.sessionId);
+              ws.data.sessionId = null;
+            }
+
             // Claude CLI の既存セッションを --resume で再開
             const claudeSessionId = data.sessionId as string;
             const workDir = data.workDir as string;
@@ -206,12 +346,7 @@ export function createWebSocketHandler() {
               // イベントハンドラを登録
               session.onMessage((msg) => {
                 try {
-                  const wsMessage = {
-                    ...msg,
-                    type: "claude_message",
-                    message_type: msg.type,
-                  };
-                  ws.send(JSON.stringify(wsMessage));
+                  ws.send(JSON.stringify(createWsMessage(msg)));
                 } catch (err) {
                   console.error("[WS] Failed to send message:", err);
                 }
@@ -222,6 +357,9 @@ export function createWebSocketHandler() {
               });
 
               session.onEnd(() => {
+                // abort 時は session_ended を送信しない（abort ハンドラで処理する）
+                if (session.isAborting) return;
+
                 try {
                   ws.send(JSON.stringify({ type: "session_ended" }));
                 } catch {

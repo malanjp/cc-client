@@ -61,6 +61,10 @@ export class ClaudeSession {
   status: "active" | "ended" = "active";
   /** Claude CLI の元セッションID（resume 時に使用） */
   claudeSessionId: string | null = null;
+  /** init メッセージから取得した Claude CLI のセッションID */
+  private claudeSessionIdFromInit: string | null = null;
+  /** abort 中かどうか（onEnd ハンドラで session_ended を送信しないため） */
+  private _isAborting = false;
 
   private process: ClaudeProcess | null = null;
   private messageHandlers: ((msg: ClaudeMessage) => void)[] = [];
@@ -151,6 +155,14 @@ export class ClaudeSession {
 
         // チャンク到着ごとに即座にメッセージを配信（ストリーミング）
         for (const message of messages) {
+          // init メッセージから session_id を取得
+          if (message.type === "system" && (message as { subtype?: string }).subtype === "init") {
+            const sessionId = (message as { session_id?: string }).session_id;
+            if (sessionId && !this.claudeSessionIdFromInit) {
+              this.claudeSessionIdFromInit = sessionId;
+              console.log(`[Session] Captured Claude session ID: ${sessionId}`);
+            }
+          }
           this.messageHandlers.forEach((h) => h(message));
         }
       }
@@ -173,7 +185,16 @@ export class ClaudeSession {
     try {
       while (true) {
         const { done, value } = await reader.read();
-        if (done) break;
+        if (done) {
+          // ストリーム終了時に残ったバッファを処理
+          if (buffer.trim()) {
+            console.error("[Claude stderr]", buffer);
+            this.errorHandlers.forEach((h) =>
+              h(new Error(`Claude CLI error: ${buffer}`))
+            );
+          }
+          break;
+        }
 
         buffer += decoder.decode(value, { stream: true });
 
@@ -238,21 +259,64 @@ export class ClaudeSession {
     this.writeToStdin({ type: "approval", approved: false });
   }
 
-  abort(): void {
-    if (this.process && this.status === "active") {
-      try {
-        // stdin に中断メッセージを送信（プロセスを終了させない）
-        this.writeToStdin({ type: "abort" });
-      } catch (error) {
-        console.error("[Session] Failed to send abort:", error);
-        // stdin への書き込みが失敗した場合のみ SIGINT を試行
+  /**
+   * tool_use に対して tool_result を返す
+   * ExitPlanMode や AskUserQuestion などの確認 UI からの応答に使用
+   */
+  async respondToToolUse(toolUseId: string, content: string): Promise<void> {
+    this.touch();
+    this.writeToStdin({
+      type: "user",
+      message: {
+        role: "user",
+        content: [{
+          type: "tool_result",
+          tool_use_id: toolUseId,
+          content,
+          is_error: false,
+        }],
+      },
+    });
+  }
+
+  /**
+   * Claude CLI のセッションIDを取得
+   * init メッセージから取得したID、または resume 時に指定されたIDを返す
+   */
+  getClaudeSessionId(): string | null {
+    return this.claudeSessionIdFromInit || this.claudeSessionId;
+  }
+
+  /**
+   * abort 中かどうか
+   * onEnd ハンドラで session_ended を送信しないために使用
+   */
+  get isAborting(): boolean {
+    return this._isAborting;
+  }
+
+  /**
+   * 現在の処理を中断（プロセスを終了）
+   * @returns プロセス終了後に resolve する Promise
+   */
+  abort(): Promise<void> {
+    return new Promise((resolve) => {
+      if (this.process && this.status === "active") {
+        this._isAborting = true;
+        // プロセス終了を待つ
+        this.process.exited.then(() => {
+          resolve();
+        });
         try {
           this.process.kill("SIGINT");
-        } catch (killError) {
-          console.error("[Session] Failed to send SIGINT:", killError);
+        } catch (error) {
+          console.error("[Session] Failed to send SIGINT:", error);
+          resolve();
         }
+      } else {
+        resolve();
       }
-    }
+    });
   }
 
   onMessage(handler: (msg: ClaudeMessage) => void): void {
@@ -265,6 +329,16 @@ export class ClaudeSession {
 
   onEnd(handler: () => void): void {
     this.endHandlers.push(handler);
+  }
+
+  /**
+   * すべてのハンドラをクリア（再登録前に呼び出す）
+   * セッション切り替え時の重複登録を防止
+   */
+  clearAllHandlers(): void {
+    this.messageHandlers = [];
+    this.errorHandlers = [];
+    this.endHandlers = [];
   }
 
   getInfo(): SessionInfo {

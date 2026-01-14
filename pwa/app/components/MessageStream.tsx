@@ -3,6 +3,7 @@ import { useSessionStore } from "../store/sessionStore";
 import { MessageBubble } from "./MessageBubble";
 import { LoadingIndicator } from "./LoadingIndicator";
 import { PermissionRequest } from "./PermissionRequest";
+import { ToolUsePrompt } from "./ToolUsePrompt";
 
 export function MessageStream() {
   const messages = useSessionStore((s) => s.messages);
@@ -25,7 +26,9 @@ export function MessageStream() {
   return (
     <div className="flex-1 overflow-y-auto p-4 space-y-4">
       {messages.map((message) =>
-        message.type === "permission_request" ? (
+        message.type === "tool_use_prompt" ? (
+          <ToolUsePrompt key={message.id} message={message} />
+        ) : message.type === "permission_request" ? (
           <PermissionRequest key={message.id} message={message} />
         ) : (
           <MessageBubble key={message.id} message={message} />

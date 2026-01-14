@@ -9,6 +9,9 @@ interface PermissionRequestProps {
 
 export function PermissionRequest({ message }: PermissionRequestProps) {
   const { approve, reject } = useWebSocket();
+
+  // permission_request タイプのみ permissionRequest プロパティを持つ
+  if (message.type !== "permission_request") return null;
   const pr = message.permissionRequest;
 
   if (!pr) return null;

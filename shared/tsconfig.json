@@ -3,23 +3,14 @@
     "target": "ES2022",
     "module": "ESNext",
     "moduleResolution": "bundler",
-    "lib": ["ES2022"],
     "strict": true,
-    "skipLibCheck": true,
     "esModuleInterop": true,
-    "allowSyntheticDefaultImports": true,
+    "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
-    "resolveJsonModule": true,
     "declaration": true,
     "declarationMap": true,
     "outDir": "./dist",
-    "noEmit": true,
-    "types": ["bun-types"],
-    "baseUrl": ".",
-    "paths": {
-      "@cc-client/shared": ["../shared/src"],
-      "@cc-client/shared/*": ["../shared/src/*"]
-    }
+    "rootDir": "./src"
   },
   "include": ["src/**/*"],
   "exclude": ["node_modules", "dist"]

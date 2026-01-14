@@ -252,9 +252,9 @@ export function ProjectSelector({ isOpen, onClose, onSelect }: ProjectSelectorPr
                       <Clock className="w-3 h-3" />
                       最近使用したプロジェクト
                     </h3>
-                    {recentProjects.map((project) => (
+                    {recentProjects.map((project, index) => (
                       <ProjectItem
-                        key={project.path}
+                        key={`recent-${index}-${project.path}`}
                         project={project}
                         onSelect={handleSelect}
                         onBrowse={browseDirectory}
@@ -268,9 +268,9 @@ export function ProjectSelector({ isOpen, onClose, onSelect }: ProjectSelectorPr
                     <h3 className="px-4 py-1 text-xs font-medium text-slate-500 uppercase tracking-wider">
                       その他のプロジェクト
                     </h3>
-                    {otherProjects.map((project) => (
+                    {otherProjects.map((project, index) => (
                       <ProjectItem
-                        key={project.path}
+                        key={`other-${index}-${project.path}`}
                         project={project}
                         onSelect={handleSelect}
                         onBrowse={browseDirectory}
@@ -288,7 +288,7 @@ export function ProjectSelector({ isOpen, onClose, onSelect }: ProjectSelectorPr
                 {/* Browse button */}
                 <div className="p-3 mt-4 border-t border-slate-700">
                   <button
-                    onClick={() => browseDirectory(process.env.HOME || "/")}
+                    onClick={() => browseDirectory("")}
                     className={cn(
                       "w-full flex items-center justify-center gap-2",
                       "py-2 px-4 rounded-lg",
